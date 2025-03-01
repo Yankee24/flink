@@ -172,7 +172,8 @@ public abstract class AbstractPythonStreamAggregateOperator
     @Override
     public PythonFunctionRunner createPythonFunctionRunner() throws Exception {
         return BeamTablePythonFunctionRunner.stateful(
-                getRuntimeContext().getTaskName(),
+                getContainingTask().getEnvironment(),
+                getRuntimeContext().getTaskInfo().getTaskName(),
                 createPythonEnvironmentManager(),
                 getFunctionUrn(),
                 getUserDefinedFunctionsProto(),
@@ -184,6 +185,7 @@ public abstract class AbstractPythonStreamAggregateOperator
                 getOperatorConfig()
                         .getManagedMemoryFractionOperatorUseCaseOfSlot(
                                 ManagedMemoryUseCase.PYTHON,
+                                getContainingTask().getJobConfiguration(),
                                 getContainingTask()
                                         .getEnvironment()
                                         .getTaskManagerInfo()
@@ -253,6 +255,15 @@ public abstract class AbstractPythonStreamAggregateOperator
                     ProtoUtils.createUserDefinedAggregateFunctionProto(
                             aggregateFunctions[i], specs));
         }
+        builder.addAllJobParameters(
+                getRuntimeContext().getGlobalJobParameters().entrySet().stream()
+                        .map(
+                                entry ->
+                                        FlinkFnApi.JobParameter.newBuilder()
+                                                .setKey(entry.getKey())
+                                                .setValue(entry.getValue())
+                                                .build())
+                        .collect(Collectors.toList()));
         return builder.build();
     }
 

@@ -17,34 +17,23 @@
 
 package org.apache.flink.table.planner.plan.rules.logical;
 
-import org.apache.flink.table.api.TableConfig;
-import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.connector.source.abilities.SupportsFilterPushDown;
 import org.apache.flink.table.expressions.ResolvedExpression;
-import org.apache.flink.table.planner.calcite.FlinkContext;
 import org.apache.flink.table.planner.expressions.converter.ExpressionConverter;
 import org.apache.flink.table.planner.plan.abilities.source.FilterPushDownSpec;
 import org.apache.flink.table.planner.plan.abilities.source.SourceAbilityContext;
 import org.apache.flink.table.planner.plan.abilities.source.SourceAbilitySpec;
 import org.apache.flink.table.planner.plan.schema.TableSourceTable;
-import org.apache.flink.table.planner.plan.utils.FlinkRelOptUtil;
-import org.apache.flink.table.planner.plan.utils.RexNodeExtractor;
-import org.apache.flink.table.planner.plan.utils.RexNodeToExpressionConverter;
-import org.apache.flink.table.planner.utils.ShortcutUtils;
-import org.apache.flink.table.planner.utils.TableConfigUtils;
 
 import org.apache.calcite.plan.RelOptRule;
-import org.apache.calcite.plan.RelOptRuleCall;
 import org.apache.calcite.plan.RelOptRuleOperand;
 import org.apache.calcite.rel.core.TableScan;
-import org.apache.calcite.rex.RexBuilder;
 import org.apache.calcite.rex.RexNode;
 import org.apache.calcite.tools.RelBuilder;
 
 import java.util.Arrays;
 import java.util.List;
-import java.util.TimeZone;
 import java.util.stream.Collectors;
 
 import scala.Tuple2;
@@ -53,13 +42,6 @@ import scala.Tuple2;
 public abstract class PushFilterIntoSourceScanRuleBase extends RelOptRule {
     public PushFilterIntoSourceScanRuleBase(RelOptRuleOperand operand, String description) {
         super(operand, description);
-    }
-
-    @Override
-    public boolean matches(RelOptRuleCall call) {
-        TableConfig tableConfig = ShortcutUtils.unwrapContext(call.getPlanner()).getTableConfig();
-        return tableConfig.get(
-                OptimizerConfigOptions.TABLE_OPTIMIZER_SOURCE_PREDICATE_PUSHDOWN_ENABLED);
     }
 
     protected List<RexNode> convertExpressionToRexNode(
@@ -118,23 +100,6 @@ public abstract class PushFilterIntoSourceScanRuleBase extends RelOptRule {
                         new SourceAbilitySpec[] {filterPushDownSpec});
 
         return new Tuple2<>(result, newTableSourceTable);
-    }
-
-    protected Tuple2<RexNode[], RexNode[]> extractPredicates(
-            String[] inputNames, RexNode filterExpression, TableScan scan, RexBuilder rexBuilder) {
-        FlinkContext context = ShortcutUtils.unwrapContext(scan);
-        int maxCnfNodeCount = FlinkRelOptUtil.getMaxCnfNodeCount(scan);
-        RexNodeToExpressionConverter converter =
-                new RexNodeToExpressionConverter(
-                        rexBuilder,
-                        inputNames,
-                        context.getFunctionCatalog(),
-                        context.getCatalogManager(),
-                        TimeZone.getTimeZone(
-                                TableConfigUtils.getLocalTimeZone(context.getTableConfig())));
-
-        return RexNodeExtractor.extractConjunctiveConditions(
-                filterExpression, maxCnfNodeCount, rexBuilder, converter);
     }
 
     /**

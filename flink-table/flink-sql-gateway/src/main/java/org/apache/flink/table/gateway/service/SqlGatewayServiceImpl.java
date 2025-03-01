@@ -19,12 +19,16 @@
 package org.apache.flink.table.gateway.service;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.client.deployment.DefaultClusterClientServiceLoader;
+import org.apache.flink.client.deployment.application.ApplicationConfiguration;
+import org.apache.flink.client.deployment.application.cli.ApplicationClusterDeployer;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.catalog.CatalogBaseTable.TableKind;
 import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.catalog.ResolvedCatalogBaseTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UnresolvedIdentifier;
+import org.apache.flink.table.data.StringData;
 import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.gateway.api.SqlGatewayService;
 import org.apache.flink.table.gateway.api.endpoint.EndpointVersion;
@@ -38,15 +42,24 @@ import org.apache.flink.table.gateway.api.results.TableInfo;
 import org.apache.flink.table.gateway.api.session.SessionEnvironment;
 import org.apache.flink.table.gateway.api.session.SessionHandle;
 import org.apache.flink.table.gateway.api.utils.SqlGatewayException;
+import org.apache.flink.table.gateway.service.operation.OperationManager;
 import org.apache.flink.table.gateway.service.session.Session;
 import org.apache.flink.table.gateway.service.session.SessionManager;
+import org.apache.flink.table.runtime.application.SqlDriver;
+import org.apache.flink.util.StringUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
+import java.net.URI;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.stream.Collectors;
 
 /** The implementation of the {@link SqlGatewayService} interface. */
 public class SqlGatewayServiceImpl implements SqlGatewayService {
@@ -76,6 +89,32 @@ public class SqlGatewayServiceImpl implements SqlGatewayService {
         } catch (Throwable e) {
             LOG.error("Failed to closeSession.", e);
             throw new SqlGatewayException("Failed to closeSession.", e);
+        }
+    }
+
+    @Override
+    public void configureSession(
+            SessionHandle sessionHandle, String statement, long executionTimeoutMs)
+            throws SqlGatewayException {
+        try {
+            if (executionTimeoutMs > 0) {
+                // TODO: support the feature in FLINK-27838
+                throw new UnsupportedOperationException(
+                        "SqlGatewayService doesn't support timeout mechanism now.");
+            }
+
+            OperationManager operationManager = getSession(sessionHandle).getOperationManager();
+            OperationHandle operationHandle =
+                    operationManager.submitOperation(
+                            handle ->
+                                    getSession(sessionHandle)
+                                            .createExecutor()
+                                            .configureSession(handle, statement));
+            operationManager.awaitOperationTermination(operationHandle);
+            operationManager.closeOperation(operationHandle);
+        } catch (Throwable t) {
+            LOG.error("Failed to configure session.", t);
+            throw new SqlGatewayException("Failed to configure session.", t);
         }
     }
 
@@ -270,6 +309,75 @@ public class SqlGatewayServiceImpl implements SqlGatewayService {
     }
 
     @Override
+    public OperationHandle refreshMaterializedTable(
+            SessionHandle sessionHandle,
+            String materializedTableIdentifier,
+            boolean isPeriodic,
+            @Nullable String scheduleTime,
+            Map<String, String> dynamicOptions,
+            Map<String, String> staticPartitions,
+            Map<String, String> executionConfig) {
+        try {
+            return getSession(sessionHandle)
+                    .getOperationManager()
+                    .submitOperation(
+                            handle ->
+                                    getSession(sessionHandle)
+                                            .createExecutor(Configuration.fromMap(executionConfig))
+                                            .refreshMaterializedTable(
+                                                    handle,
+                                                    materializedTableIdentifier,
+                                                    isPeriodic,
+                                                    scheduleTime,
+                                                    staticPartitions,
+                                                    dynamicOptions));
+        } catch (Throwable t) {
+            LOG.error("Failed to refresh MaterializedTable.", t);
+            throw new SqlGatewayException("Failed to refresh MaterializedTable.", t);
+        }
+    }
+
+    @Override
+    public <ClusterID> ClusterID deployScript(
+            SessionHandle sessionHandle,
+            @Nullable URI scriptUri,
+            @Nullable String script,
+            Configuration executionConfig)
+            throws SqlGatewayException {
+        Session session = sessionManager.getSession(sessionHandle);
+        if (scriptUri == null && script == null) {
+            throw new IllegalArgumentException("Please specify script content or uri.");
+        }
+        if (scriptUri != null && !StringUtils.isNullOrWhitespaceOnly(script)) {
+            throw new IllegalArgumentException(
+                    "Please specify either the script uri or the script content, but not both.");
+        }
+        Configuration mergedConfig = Configuration.fromMap(session.getSessionConfig());
+        mergedConfig.addAll(executionConfig);
+
+        List<String> arguments = new ArrayList<>();
+        if (scriptUri != null) {
+            arguments.add("--" + SqlDriver.OPTION_SQL_FILE.getLongOpt());
+            arguments.add(scriptUri.toString());
+        }
+        if (script != null) {
+            arguments.add("--" + SqlDriver.OPTION_SQL_SCRIPT.getLongOpt());
+            arguments.add(script);
+        }
+
+        ApplicationConfiguration applicationConfiguration =
+                new ApplicationConfiguration(
+                        arguments.toArray(new String[0]), SqlDriver.class.getName());
+        try {
+            return new ApplicationClusterDeployer(new DefaultClusterClientServiceLoader())
+                    .run(mergedConfig, applicationConfiguration);
+        } catch (Throwable t) {
+            LOG.error("Failed to deploy script to cluster.", t);
+            throw new SqlGatewayException("Failed to deploy script to cluster.", t);
+        }
+    }
+
+    @Override
     public Set<FunctionInfo> listUserDefinedFunctions(
             SessionHandle sessionHandle, String catalogName, String databaseName)
             throws SqlGatewayException {
@@ -311,8 +419,36 @@ public class SqlGatewayServiceImpl implements SqlGatewayService {
         return GatewayInfo.INSTANCE;
     }
 
+    @Override
+    public List<String> completeStatement(
+            SessionHandle sessionHandle, String statement, int position)
+            throws SqlGatewayException {
+        try {
+            OperationManager operationManager = getSession(sessionHandle).getOperationManager();
+            OperationHandle operationHandle =
+                    operationManager.submitOperation(
+                            handle ->
+                                    getSession(sessionHandle)
+                                            .createExecutor()
+                                            .getCompletionHints(handle, statement, position));
+            operationManager.awaitOperationTermination(operationHandle);
+
+            ResultSet resultSet =
+                    fetchResults(sessionHandle, operationHandle, 0, Integer.MAX_VALUE);
+            return resultSet.getData().stream()
+                    .map(data -> data.getString(0))
+                    .map(StringData::toString)
+                    .collect(Collectors.toList());
+        } catch (Throwable t) {
+            LOG.error("Failed to get statement completion candidates.", t);
+            throw new SqlGatewayException("Failed to get statement completion candidates.", t);
+        }
+    }
+
+    // --------------------------------------------------------------------------------------------
+
     @VisibleForTesting
-    Session getSession(SessionHandle sessionHandle) {
+    public Session getSession(SessionHandle sessionHandle) {
         return sessionManager.getSession(sessionHandle);
     }
 }

@@ -21,11 +21,12 @@ import org.apache.flink.table.catalog.ContextResolvedTable
 import org.apache.flink.table.connector.sink.DynamicTableSink
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory
 import org.apache.flink.table.planner.plan.abilities.sink.SinkAbilitySpec
+import org.apache.flink.table.planner.plan.metadata.FlinkRelMetadataQuery
 import org.apache.flink.table.planner.plan.nodes.calcite.Sink
 import org.apache.flink.table.planner.plan.nodes.exec.{ExecNode, InputProperty}
 import org.apache.flink.table.planner.plan.nodes.exec.spec.DynamicTableSinkSpec
 import org.apache.flink.table.planner.plan.nodes.exec.stream.StreamExecSink
-import org.apache.flink.table.planner.plan.utils.ChangelogPlanUtils
+import org.apache.flink.table.planner.plan.utils.{ChangelogPlanUtils, UpsertKeyUtil}
 import org.apache.flink.table.planner.utils.ShortcutUtils.unwrapTableConfig
 
 import org.apache.calcite.plan.{RelOptCluster, RelTraitSet}
@@ -35,7 +36,7 @@ import org.apache.calcite.rel.hint.RelHint
 import java.util
 
 /**
- * Stream physical RelNode to to write data into an external sink defined by a [[DynamicTableSink]].
+ * Stream physical RelNode to write data into an external sink defined by a [[DynamicTableSink]].
  */
 class StreamPhysicalSink(
     cluster: RelOptCluster,
@@ -44,9 +45,10 @@ class StreamPhysicalSink(
     hints: util.List[RelHint],
     contextResolvedTable: ContextResolvedTable,
     tableSink: DynamicTableSink,
+    targetColumns: Array[Array[Int]],
     abilitySpecs: Array[SinkAbilitySpec],
     val upsertMaterialize: Boolean = false)
-  extends Sink(cluster, traitSet, inputRel, hints, contextResolvedTable, tableSink)
+  extends Sink(cluster, traitSet, inputRel, hints, targetColumns, contextResolvedTable, tableSink)
   with StreamPhysicalRel {
 
   override def requireWatermark: Boolean = false
@@ -59,6 +61,7 @@ class StreamPhysicalSink(
       hints,
       contextResolvedTable,
       tableSink,
+      targetColumns,
       abilitySpecs,
       upsertMaterialize)
   }
@@ -71,6 +74,7 @@ class StreamPhysicalSink(
       hints,
       contextResolvedTable,
       tableSink,
+      targetColumns,
       abilitySpecs,
       newUpsertMaterialize)
   }
@@ -79,8 +83,17 @@ class StreamPhysicalSink(
     val inputChangelogMode =
       ChangelogPlanUtils.getChangelogMode(getInput.asInstanceOf[StreamPhysicalRel]).get
     val tableSinkSpec =
-      new DynamicTableSinkSpec(contextResolvedTable, util.Arrays.asList(abilitySpecs: _*))
+      new DynamicTableSinkSpec(
+        contextResolvedTable,
+        util.Arrays.asList(abilitySpecs: _*),
+        targetColumns)
     tableSinkSpec.setTableSink(tableSink)
+    // no need to call getUpsertKeysInKeyGroupRange here because there's no exchange before sink,
+    // and only add exchange in exec sink node.
+    val inputUpsertKeys = FlinkRelMetadataQuery
+      .reuseOrCreate(cluster.getMetadataQuery)
+      .getUpsertKeys(inputRel)
+
     new StreamExecSink(
       unwrapTableConfig(this),
       tableSinkSpec,
@@ -88,6 +101,7 @@ class StreamPhysicalSink(
       InputProperty.DEFAULT,
       FlinkTypeFactory.toLogicalRowType(getRowType),
       upsertMaterialize,
+      UpsertKeyUtil.getSmallestKey(inputUpsertKeys),
       getRelDetailedDescription)
   }
 

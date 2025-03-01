@@ -797,7 +797,7 @@ class DataStream(object):
             .STREAM_PARTITION_CUSTOM_MAP_OPERATOR_NAME)
 
         JPartitionCustomKeySelector = gateway.jvm.PartitionCustomKeySelector
-        JIdParitioner = gateway.jvm.org.apache.flink.api.java.functions.IdPartitioner
+        JIdParitioner = gateway.jvm.org.apache.flink.python.legacy.IdPartitioner
         partitioned_stream_with_partition_info = DataStream(
             stream_with_partition_info._j_data_stream.partitionCustom(
                 JIdParitioner(), JPartitionCustomKeySelector()))
@@ -893,7 +893,8 @@ class DataStream(object):
 
         .. versionadded:: 1.16.0
         """
-        return DataStream(self._j_data_stream.getSideOutput(output_tag.get_java_output_tag()))
+        ds = DataStream(self._j_data_stream.getSideOutput(output_tag.get_java_output_tag()))
+        return ds.map(lambda i: i, output_type=output_tag.type_info)
 
     def cache(self) -> 'CachedDataStream':
         """
@@ -1217,7 +1218,7 @@ class KeyedStream(DataStream):
         gateway = get_gateway()
         j_conf = get_j_env_configuration(self._j_data_stream.getExecutionEnvironment())
         python_execution_mode = (
-            j_conf.getString(
+            j_conf.get(
                 gateway.jvm.org.apache.flink.python.PythonOptions.PYTHON_EXECUTION_MODE))
 
         class ReduceProcessKeyedProcessFunctionAdapter(KeyedProcessFunction):
@@ -2782,7 +2783,7 @@ def _get_one_input_stream_operator(data_stream: DataStream,
     j_output_type_info = output_type_info.get_java_type_info()
     j_conf = get_j_env_configuration(data_stream._j_data_stream.getExecutionEnvironment())
     python_execution_mode = (
-        j_conf.getString(gateway.jvm.org.apache.flink.python.PythonOptions.PYTHON_EXECUTION_MODE))
+        j_conf.get(gateway.jvm.org.apache.flink.python.PythonOptions.PYTHON_EXECUTION_MODE))
 
     from pyflink.fn_execution.flink_fn_execution_pb2 import UserDefinedDataStreamFunction
     if func_type == UserDefinedDataStreamFunction.PROCESS:  # type: ignore
@@ -2863,7 +2864,7 @@ def _get_two_input_stream_operator(connected_streams: ConnectedStreams,
     j_conf = get_j_env_configuration(
         connected_streams.stream1._j_data_stream.getExecutionEnvironment())
     python_execution_mode = (
-        j_conf.getString(gateway.jvm.org.apache.flink.python.PythonOptions.PYTHON_EXECUTION_MODE))
+        j_conf.get(gateway.jvm.org.apache.flink.python.PythonOptions.PYTHON_EXECUTION_MODE))
 
     from pyflink.fn_execution.flink_fn_execution_pb2 import UserDefinedDataStreamFunction
     if func_type == UserDefinedDataStreamFunction.CO_PROCESS:  # type: ignore
