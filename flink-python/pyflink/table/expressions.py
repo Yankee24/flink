@@ -30,9 +30,10 @@ __all__ = ['if_then_else', 'lit', 'col', 'range_', 'and_', 'or_', 'not_', 'UNBOU
            'current_watermark', 'local_time', 'local_timestamp',
            'temporal_overlaps', 'date_format', 'timestamp_diff', 'array', 'row', 'map_',
            'row_interval', 'pi', 'e', 'rand', 'rand_integer', 'atan2', 'negative', 'concat',
-           'concat_ws', 'uuid', 'null_of', 'log', 'with_columns', 'without_columns', 'json_string',
-           'json_object', 'json_object_agg', 'json_array', 'json_array_agg', 'call', 'call_sql',
-           'source_watermark']
+           'concat_ws', 'uuid', 'null_of', 'log', 'with_columns', 'without_columns', 'json',
+           'json_string', 'json_object', 'json_object_agg', 'json_array', 'json_array_agg',
+           'call', 'call_sql', 'source_watermark', 'to_timestamp_ltz', 'from_unixtime', 'to_date',
+           'to_timestamp', 'convert_tz', 'unix_timestamp']
 
 
 def _leaf_op(op_name: str) -> Expression:
@@ -93,6 +94,8 @@ def col(name: str) -> Expression:
         >>> tab.select(col("key"), col("value"))
 
     :param name: the field name to refer to
+
+    .. seealso:: :func:`~pyflink.table.expressions.with_all_columns`
     """
     return _unary_op("col", name)
 
@@ -272,19 +275,78 @@ def local_timestamp() -> Expression:
     return _leaf_op("localTimestamp")
 
 
-def to_timestamp_ltz(numeric_epoch_time, precision) -> Expression:
+def to_date(date_str: Union[str, Expression[str]],
+            format: Union[str, Expression[str]] = None) -> Expression:
     """
-    Converts a numeric type epoch time to TIMESTAMP_LTZ.
+    Converts the date string with the given format (by default 'yyyy-MM-dd') to a date.
 
-    The supported precision is 0 or 3:
-    0 means the numericEpochTime is in second.
-    3 means the numericEpochTime is in millisecond.
-
-    :param numeric_epoch_time: The epoch time with numeric type
-    :param precision: The precision to indicate the epoch time is in second or millisecond
-    :return: The timestamp value with TIMESTAMP_LTZ type.
+    :param date_str: The date string
+    :param format: The format of the string
+    :return: The date value with DATE type.
     """
-    return _binary_op("toTimestampLtz", numeric_epoch_time, precision)
+    if format is None:
+        return _unary_op("toDate", date_str)
+    else:
+        return _binary_op("toDate", date_str, format)
+
+
+def to_timestamp(timestamp_str: Union[str, Expression[str]],
+                 format: Union[str, Expression[str]] = None) -> Expression:
+    """
+    Converts the date time string with the given format (by default: 'yyyy-MM-dd HH:mm:ss')
+    under the 'UTC+0' time zone to a timestamp.
+
+    :param timestamp_str: The date time string
+    :param format: The format of the string
+    :return: The date value with TIMESTAMP type.
+    """
+    if format is None:
+        return _unary_op("toTimestamp", timestamp_str)
+    else:
+        return _binary_op("toTimestamp", timestamp_str, format)
+
+
+def to_timestamp_ltz(*args) -> Expression:
+    """
+    Converts a value to a timestamp with local time zone.
+
+    Supported functions:
+    1. to_timestamp_ltz(Numeric) -> DataTypes.TIMESTAMP_LTZ
+    Converts a numeric value of epoch milliseconds to a TIMESTAMP_LTZ. The default precision is 3.
+    2. to_timestamp_ltz(Numeric, Integer) -> DataTypes.TIMESTAMP_LTZ
+    Converts a numeric value of epoch seconds or epoch milliseconds to a TIMESTAMP_LTZ.
+    Valid precisions are 0 or 3.
+    3. to_timestamp_ltz(String) -> DataTypes.TIMESTAMP_LTZ
+    Converts a timestamp string using default format 'yyyy-MM-dd HH:mm:ss.SSS' to a TIMESTAMP_LTZ.
+    4. to_timestamp_ltz(String, String) -> DataTypes.TIMESTAMP_LTZ
+    Converts a timestamp string using format (default 'yyyy-MM-dd HH:mm:ss.SSS') to a TIMESTAMP_LTZ.
+    5. to_timestamp_ltz(String, String, String) -> DataTypes.TIMESTAMP_LTZ
+    Converts a timestamp string string1 using format string2 (default 'yyyy-MM-dd HH:mm:ss.SSS')
+    in time zone string3 (default 'UTC') to a TIMESTAMP_LTZ.
+    Supports any timezone that is available in Java's TimeZone database.
+
+    Example:
+    ::
+
+        >>> table.select(to_timestamp_ltz(100))  # numeric with default precision
+        >>> table.select(to_timestamp_ltz(100, 0))  # numeric with second precision
+        >>> table.select(to_timestamp_ltz(100, 3))  # numeric with millisecond precision
+        >>> table.select(to_timestamp_ltz("2023-01-01 00:00:00"))  # string with default format
+        >>> table.select(to_timestamp_ltz("01/01/2023", "MM/dd/yyyy"))  # string with format
+        >>> table.select(to_timestamp_ltz("2023-01-01 00:00:00",
+                                        "yyyy-MM-dd HH:mm:ss",
+                                        "UTC"))  # string with format and timezone
+    """
+    if len(args) == 1:
+        return _unary_op("toTimestampLtz", lit(args[0]))
+
+    # For two arguments case (numeric + precision or string + format)
+    elif len(args) == 2:
+        return _binary_op("toTimestampLtz", lit(args[0]), lit(args[1]))
+
+    # For three arguments case (string + format + timezone)
+    else:
+        return _ternary_op("toTimestampLtz", lit(args[0]), lit(args[1]), lit(args[2]))
 
 
 def temporal_overlaps(left_time_point,
@@ -347,15 +409,57 @@ def timestamp_diff(time_point_unit: TimePointUnit, time_point1, time_point2) -> 
                        time_point1, time_point2)
 
 
+def convert_tz(date_str: Union[str, Expression[str]],
+               tz_from: Union[str, Expression[str]],
+               tz_to: Union[str, Expression[str]]) -> Expression:
+    """
+    Converts a datetime string date_str (with default ISO timestamp format 'yyyy-MM-dd HH:mm:ss')
+    from time zone tz_from to time zone tz_to. The format of time zone should be either an
+    abbreviation such as "PST", a full name such as "America/Los_Angeles", or a custom ID such as
+    "GMT-08:00". E.g., convert_tz('1970-01-01 00:00:00', 'UTC', 'America/Los_Angeles') returns
+    '1969-12-31 16:00:00'.
+
+    Example:
+    ::
+
+        >>> tab.select(convert_tz(col('a'), 'PST', 'UTC'))
+
+    :param date_str: the date time string
+    :param tz_from: the original time zone
+    :param tz_to: the target time zone
+    :return: The formatted timestamp as string.
+    """
+    return _ternary_op("convertTz", date_str, tz_from, tz_to)
+
+
 def from_unixtime(unixtime, format=None) -> Expression:
     """
-    Convert unix timestamp (seconds since '1970-01-01 00:00:00' UTC) to datetime string the given
+    Converts unix timestamp (seconds since '1970-01-01 00:00:00' UTC) to datetime string the given
     format. The default format is "yyyy-MM-dd HH:mm:ss".
     """
     if format is None:
         return _unary_op("fromUnixtime", unixtime)
     else:
         return _binary_op("fromUnixtime", unixtime, format)
+
+
+def unix_timestamp(date_str: Union[str, Expression[str]] = None,
+                   format: Union[str, Expression[str]] = None) -> Expression:
+    """
+    Gets the current unix timestamp in seconds if no arguments are not specified.
+    This function is not deterministic which means the value would be recalculated for each record.
+
+    If the date time string date_str is specified, it will convert the given date time string
+    in the specified format (by default: yyyy-MM-dd HH:mm:ss if not specified) to unix timestamp
+    (in seconds), using the specified timezone in table config.
+    """
+
+    if date_str is None:
+        return _leaf_op("unixTimestamp")
+    elif format is None:
+        return _unary_op("unixTimestamp", date_str)
+    else:
+        return _binary_op("unixTimestamp", date_str, format)
 
 
 def array(head, *tail) -> Expression:
@@ -407,6 +511,26 @@ def map_(key, value, *tail) -> Expression:
     gateway = get_gateway()
     tail = to_jarray(gateway.jvm.Object, [_get_java_expression(t) for t in tail])
     return _ternary_op("map", key, value, tail)
+
+
+def map_from_arrays(key, value) -> Expression:
+    """
+    Creates a map from an array of keys and an array of values.
+
+    Example:
+    ::
+
+        >>> tab.select(
+        >>>     map_from_arrays(
+        >>>         array("key1", "key2", "key3"),
+        >>>         array(1, 2, 3)
+        >>>     ))
+
+    .. note::
+
+        both arrays should have the same length.
+    """
+    return _binary_op("mapFromArrays", key, value)
 
 
 def row_interval(rows: int) -> Expression:
@@ -593,6 +717,22 @@ def coalesce(*args) -> Expression:
     return _unary_op("coalesce", args)
 
 
+def with_all_columns() -> Expression:
+    """
+    Creates an expression that selects all columns. It can be used wherever an array of
+    expression is accepted such as function calls, projections, or groupings.
+
+    This expression is a synonym of col("*"). It is semantically equal to SELECT * in
+    SQL when used in a projection.
+
+    e.g. tab.select(with_all_columns())
+
+    .. seealso:: :func:`~pyflink.table.expressions.with_columns`
+                 :func:`~pyflink.table.expressions.without_columns`
+    """
+    return _leaf_op("withAllColumns")
+
+
 def with_columns(head, *tails) -> Expression:
     """
     Creates an expression that selects a range of columns. It can be used wherever an array of
@@ -628,6 +768,39 @@ def without_columns(head, *tails) -> Expression:
     gateway = get_gateway()
     tails = to_jarray(gateway.jvm.Object, [_get_java_expression(t) for t in tails])
     return _binary_op("withoutColumns", head, tails)
+
+
+def json(value) -> Expression:
+    """
+    Expects a raw, pre-formatted JSON string and returns its values as-is without escaping
+    it as a string.
+
+    This function can currently only be used within the `JSON_OBJECT` and `JSON_ARRAY` functions.
+    It allows passing pre-formatted JSON strings that will be inserted directly into the
+    resulting JSON structure rather than being escaped as a string value. This allows storing
+    nested JSON structures in a `JSON_OBJECT` or `JSON_ARRAY` without processing them as strings,
+    which is often useful when ingesting already formatted json data. If the value is NULL or
+    empty, the function returns NULL.
+
+    Examples:
+    ::
+
+        >>> # {"nested":{"value":42}}
+        >>> json_object(JsonOnNull.NULL, "nested", json('{"value": 42}'))
+
+        >>> # {"K": null}
+        >>> json_object(JsonOnNull.NULL, "K", json(''))
+
+        >>> # [{"nested":{"value":42}}]
+        >>> json_array(JsonOnNull.NULL, json('{"nested":{"value": 42}}'))
+
+        >>> # [null]
+        >>> json_array(JsonOnNull.NULL, json(''))
+
+        >>> # Invalid - JSON function can only be used within JSON_OBJECT
+        >>> json('{"value": 42}')
+    """
+    return _unary_op("json", value)
 
 
 def json_string(value) -> Expression:
@@ -676,8 +849,12 @@ def json_object(on_null: JsonOnNull = JsonOnNull.NULL, *args) -> Expression:
         >>> json_object(JsonOnNull.ABSENT, "K1", null_of(DataTypes.STRING())) # '{}'
 
         >>> # '{"K1":{"K2":"V"}}'
+        >>> json_object(JsonOnNull.NULL, "K1", json('{"K2":"V"}'))
+
+        >>> # '{"K1":{"K2":"V"}}'
         >>> json_object(JsonOnNull.NULL, "K1", json_object(JsonOnNull.NULL, "K2", "V"))
 
+    .. seealso:: :func:`~pyflink.table.expressions.json`
     .. seealso:: :func:`~pyflink.table.expressions.json_array`
     """
     return _varargs_op("jsonObject", *(on_null._to_j_json_on_null(), *args))
@@ -731,6 +908,10 @@ def json_array(on_null: JsonOnNull = JsonOnNull.ABSENT, *args) -> Expression:
 
         >>> json_array(JsonOnNull.NULL, json_array(JsonOnNull.NULL, 1)) # '[[1]]'
 
+        # '[{"nested_json":{"value":42}}]'
+        >>> json_array(JsonOnNull.NULL, json('{"nested_json": {"value": 42}}'))
+
+    .. seealso:: :func:`~pyflink.table.expressions.json`
     .. seealso:: :func:`~pyflink.table.expressions.json_object`
     """
     return _varargs_op("jsonArray", *(on_null._to_j_json_on_null(), *args))
@@ -753,6 +934,28 @@ def json_array_agg(on_null: JsonOnNull, item_expr) -> Expression:
         >>> orders.select(json_array_agg(JsonOnNull.NULL, col("product")))
     """
     return _binary_op("jsonArrayAgg", on_null._to_j_json_on_null(), item_expr)
+
+
+def lag(expr, offset=1, default=None) -> Expression:
+    """
+    A window function that provides access to a row at a specified physical offset which comes
+    before the current row.
+    """
+    if default is None:
+        return _binary_op("lag", expr, offset)
+    else:
+        return _ternary_op("lag", expr, offset, default)
+
+
+def lead(expr, offset=1, default=None) -> Expression:
+    """
+    A window function that provides access to a row at a specified physical offset which comes
+    after the current row.
+    """
+    if default is None:
+        return _binary_op("lead", expr, offset)
+    else:
+        return _ternary_op("lead", expr, offset, default)
 
 
 def call(f: Union[str, UserDefinedFunctionWrapper], *args) -> Expression:
