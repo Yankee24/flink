@@ -100,7 +100,9 @@ enum CompatibilityRoutines {
                     QueryParameterContainer.class,
                     header -> {
                         List<QueryParameterContainer.QueryParameter> pathParameters =
-                                header.getUnresolvedMessageParameters().getQueryParameters()
+                                header
+                                        .getUnresolvedMessageParameters()
+                                        .getQueryParameters()
                                         .stream()
                                         .map(
                                                 param ->
@@ -230,6 +232,7 @@ enum CompatibilityRoutines {
                 final JsonNode curProperties = curProperty.get("properties");
 
                 if (oldProperties != null) {
+                    assertThat(curProperties).as("New object has no properties.").isNotNull();
                     for (Iterator<Map.Entry<String, JsonNode>> it = oldProperties.fields();
                             it.hasNext(); ) {
                         final Map.Entry<String, JsonNode> oldPropertyWithKey = it.next();

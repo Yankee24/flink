@@ -23,14 +23,14 @@ import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.typeutils.TupleTypeInfo;
 import org.apache.flink.table.api.DataTypes;
-import org.apache.flink.table.api.TableSchema;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.catalog.ResolvedSchema;
-import org.apache.flink.table.sinks.TableSink;
-import org.apache.flink.table.sources.DefinedProctimeAttribute;
-import org.apache.flink.table.sources.DefinedRowtimeAttributes;
-import org.apache.flink.table.sources.RowtimeAttributeDescriptor;
-import org.apache.flink.table.sources.TableSource;
+import org.apache.flink.table.legacy.api.TableSchema;
+import org.apache.flink.table.legacy.sinks.TableSink;
+import org.apache.flink.table.legacy.sources.DefinedProctimeAttribute;
+import org.apache.flink.table.legacy.sources.DefinedRowtimeAttributes;
+import org.apache.flink.table.legacy.sources.RowtimeAttributeDescriptor;
+import org.apache.flink.table.legacy.sources.TableSource;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LegacyTypeInformationType;
 import org.apache.flink.table.types.utils.DataTypeUtils;
@@ -160,7 +160,7 @@ class TypeMappingUtilsTest {
                         "Type DECIMAL(38, 10) of table field 'f0' does not match with the "
                                 + "physical type LEGACY('DECIMAL', 'DECIMAL') of the "
                                 + "'f0' field of the TableSource return type.")
-                .getCause()
+                .cause()
                 .isInstanceOf(ValidationException.class)
                 .hasMessage("Legacy decimal type can only be mapped to DECIMAL(38, 18).");
     }

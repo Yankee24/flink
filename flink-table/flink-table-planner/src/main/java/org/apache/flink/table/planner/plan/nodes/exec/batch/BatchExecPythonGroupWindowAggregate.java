@@ -114,10 +114,10 @@ public class BatchExecPythonGroupWindowAggregate extends ExecNodeBase<RowData>
 
         final Tuple2<Long, Long> windowSizeAndSlideSize = WindowCodeGenerator.getWindowDef(window);
         final Configuration pythonConfig =
-                CommonPythonUtil.extractPythonConfiguration(planner.getExecEnv(), config);
+                CommonPythonUtil.extractPythonConfiguration(
+                        planner.getTableConfig(), planner.getFlinkContext().getClassLoader());
         int groupBufferLimitSize =
-                pythonConfig.getInteger(
-                        ExecutionConfigOptions.TABLE_EXEC_WINDOW_AGG_BUFFER_SIZE_LIMIT);
+                pythonConfig.get(ExecutionConfigOptions.TABLE_EXEC_WINDOW_AGG_BUFFER_SIZE_LIMIT);
 
         OneInputTransformation<RowData, RowData> transform =
                 createPythonOneInputTransformation(
@@ -130,7 +130,8 @@ public class BatchExecPythonGroupWindowAggregate extends ExecNodeBase<RowData>
                         pythonConfig,
                         config,
                         planner.getFlinkContext().getClassLoader());
-        if (CommonPythonUtil.isPythonWorkerUsingManagedMemory(pythonConfig)) {
+        if (CommonPythonUtil.isPythonWorkerUsingManagedMemory(
+                pythonConfig, planner.getFlinkContext().getClassLoader())) {
             transform.declareManagedMemoryUseCaseAtSlotScope(ManagedMemoryUseCase.PYTHON);
         }
         return transform;
@@ -186,7 +187,8 @@ public class BatchExecPythonGroupWindowAggregate extends ExecNodeBase<RowData>
                 createTransformationDescription(config),
                 pythonOperator,
                 InternalTypeInfo.of(outputRowType),
-                inputTransform.getParallelism());
+                inputTransform.getParallelism(),
+                false);
     }
 
     @SuppressWarnings("unchecked")
@@ -204,7 +206,7 @@ public class BatchExecPythonGroupWindowAggregate extends ExecNodeBase<RowData>
             PythonFunctionInfo[] pythonFunctionInfos) {
         Class<?> clazz =
                 CommonPythonUtil.loadClass(
-                        ARROW_PYTHON_GROUP_WINDOW_AGGREGATE_FUNCTION_OPERATOR_NAME);
+                        ARROW_PYTHON_GROUP_WINDOW_AGGREGATE_FUNCTION_OPERATOR_NAME, classLoader);
 
         RowType udfInputType = (RowType) Projection.of(udafInputOffsets).project(inputRowType);
         RowType udfOutputType =

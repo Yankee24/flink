@@ -19,23 +19,39 @@
 package org.apache.flink.table.gateway.service.result;
 
 import org.apache.flink.annotation.VisibleForTesting;
+import org.apache.flink.api.common.JobID;
+import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.table.api.ResultKind;
+import org.apache.flink.table.api.internal.TableResultImpl;
+import org.apache.flink.table.api.internal.TableResultInternal;
+import org.apache.flink.table.api.internal.TableResultUtils;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.gateway.api.operation.OperationHandle;
 import org.apache.flink.table.gateway.api.results.FetchOrientation;
 import org.apache.flink.table.gateway.api.results.ResultSet;
+import org.apache.flink.table.gateway.api.results.ResultSetImpl;
 import org.apache.flink.table.gateway.service.utils.SqlExecutionException;
+import org.apache.flink.table.resource.ResourceManager;
+import org.apache.flink.table.utils.print.PrintStyle;
+import org.apache.flink.table.utils.print.RowDataToStringConverter;
 import org.apache.flink.util.CloseableIterator;
+import org.apache.flink.util.CollectionUtil;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Optional;
+
+import static org.apache.flink.table.api.internal.StaticResultProvider.SIMPLE_ROW_DATA_TO_STRING_CONVERTER;
 
 /**
  * A fetcher to fetch result from submitted statement.
@@ -54,18 +70,41 @@ public class ResultFetcher {
     private final OperationHandle operationHandle;
 
     private final ResolvedSchema resultSchema;
+    private final PrintStyle printStyle;
     private final ResultStore resultStore;
     private final LinkedList<RowData> bufferedResults = new LinkedList<>();
     private final LinkedList<RowData> bufferedPrevResults = new LinkedList<>();
+    private final RowDataToStringConverter converter;
+
+    private final boolean isQueryResult;
+
+    @Nullable private final JobID jobID;
+
+    private final ResultKind resultKind;
 
     private long currentToken = 0;
     private boolean noMoreResults = false;
+    @Nullable private ResourceManager resourceManager;
 
-    public ResultFetcher(
+    private ResultFetcher(
             OperationHandle operationHandle,
             ResolvedSchema resultSchema,
-            CloseableIterator<RowData> resultRows) {
-        this(operationHandle, resultSchema, resultRows, TABLE_RESULT_MAX_INITIAL_CAPACITY);
+            CloseableIterator<RowData> resultRows,
+            RowDataToStringConverter converter,
+            boolean isQueryResult,
+            @Nullable JobID jobID,
+            ResultKind resultKind,
+            PrintStyle printStyle) {
+        this(
+                operationHandle,
+                resultSchema,
+                resultRows,
+                converter,
+                isQueryResult,
+                jobID,
+                resultKind,
+                TABLE_RESULT_MAX_INITIAL_CAPACITY,
+                printStyle);
     }
 
     @VisibleForTesting
@@ -73,26 +112,119 @@ public class ResultFetcher {
             OperationHandle operationHandle,
             ResolvedSchema resultSchema,
             CloseableIterator<RowData> resultRows,
-            int maxBufferSize) {
+            RowDataToStringConverter converter,
+            boolean isQueryResult,
+            @Nullable JobID jobID,
+            ResultKind resultKind,
+            int maxBufferSize,
+            PrintStyle printStyle) {
         this.operationHandle = operationHandle;
         this.resultSchema = resultSchema;
         this.resultStore = new ResultStore(resultRows, maxBufferSize);
+        this.converter = converter;
+        this.isQueryResult = isQueryResult;
+        this.jobID = jobID;
+        this.resultKind = resultKind;
+        this.printStyle = printStyle;
     }
 
-    public ResultFetcher(
-            OperationHandle operationHandle, ResolvedSchema resultSchema, List<RowData> rows) {
+    private ResultFetcher(
+            OperationHandle operationHandle,
+            ResolvedSchema resultSchema,
+            List<RowData> rows,
+            @Nullable JobID jobID,
+            ResultKind resultKind) {
         this.operationHandle = operationHandle;
         this.resultSchema = resultSchema;
         this.bufferedResults.addAll(rows);
         this.resultStore = ResultStore.DUMMY_RESULT_STORE;
+        this.converter = SIMPLE_ROW_DATA_TO_STRING_CONVERTER;
+        this.isQueryResult = false;
+        this.jobID = jobID;
+        this.resultKind = resultKind;
+        this.printStyle = TableResultUtils.buildPrintStyle(resultSchema, converter);
+    }
+
+    public static ResultFetcher fromTableResult(
+            OperationHandle operationHandle,
+            TableResultInternal tableResult,
+            boolean isQueryResult) {
+        if (isQueryResult) {
+            JobID jobID =
+                    tableResult
+                            .getJobClient()
+                            .orElseThrow(
+                                    () ->
+                                            new SqlExecutionException(
+                                                    String.format(
+                                                            "Can't get job client for the operation %s.",
+                                                            operationHandle)))
+                            .getJobID();
+            return new ResultFetcher(
+                    operationHandle,
+                    tableResult.getResolvedSchema(),
+                    tableResult.collectInternal(),
+                    tableResult.getRowDataToStringConverter(),
+                    true,
+                    jobID,
+                    tableResult.getResultKind(),
+                    ((TableResultImpl) tableResult).getPrintStyle());
+        } else {
+            return new ResultFetcher(
+                    operationHandle,
+                    tableResult.getResolvedSchema(),
+                    CollectionUtil.iteratorToList(tableResult.collectInternal()),
+                    tableResult.getJobClient().map(JobClient::getJobID).orElse(null),
+                    tableResult.getResultKind());
+        }
+    }
+
+    public static ResultFetcher fromResults(
+            OperationHandle operationHandle, ResolvedSchema resultSchema, List<RowData> results) {
+        return fromResults(
+                operationHandle, resultSchema, results, null, ResultKind.SUCCESS_WITH_CONTENT);
+    }
+
+    public static ResultFetcher fromResults(
+            OperationHandle operationHandle,
+            ResolvedSchema resultSchema,
+            List<RowData> results,
+            @Nullable JobID jobID,
+            ResultKind resultKind) {
+        return new ResultFetcher(operationHandle, resultSchema, results, jobID, resultKind);
+    }
+
+    public ResultFetcher withResourceManager(ResourceManager resourceManager) {
+        this.resourceManager = resourceManager;
+        return this;
     }
 
     public void close() {
         resultStore.close();
+        if (resourceManager != null) {
+            try {
+                resourceManager.close();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
     }
 
     public ResolvedSchema getResultSchema() {
         return resultSchema;
+    }
+
+    public boolean isQueryResult() {
+        return isQueryResult;
+    }
+
+    public PrintStyle getPrintStyle() {
+        return printStyle;
+    }
+
+    @VisibleForTesting
+    public RowDataToStringConverter getConverter() {
+        return converter;
     }
 
     public synchronized ResultSet fetchResults(FetchOrientation orientation, int maxFetchSize) {
@@ -132,8 +264,15 @@ public class ResultFetcher {
             // equal to the Iterator.next()
             if (noMoreResults) {
                 LOG.debug("There is no more result for operation: {}.", operationHandle);
-                return new ResultSet(
-                        ResultSet.ResultType.EOS, null, resultSchema, Collections.emptyList());
+                return new ResultSetImpl(
+                        ResultSet.ResultType.EOS,
+                        null,
+                        resultSchema,
+                        Collections.emptyList(),
+                        converter,
+                        isQueryResult,
+                        jobID,
+                        resultKind);
             }
 
             // a new token arrives, move the current buffer data into the prev buffered results.
@@ -147,8 +286,15 @@ public class ResultFetcher {
                     bufferedResults.addAll(newResults.get());
                 } else {
                     noMoreResults = true;
-                    return new ResultSet(
-                            ResultSet.ResultType.EOS, null, resultSchema, Collections.emptyList());
+                    return new ResultSetImpl(
+                            ResultSet.ResultType.EOS,
+                            null,
+                            resultSchema,
+                            Collections.emptyList(),
+                            converter,
+                            isQueryResult,
+                            jobID,
+                            resultKind);
                 }
             }
 
@@ -166,11 +312,15 @@ public class ResultFetcher {
             for (int i = 0; i < resultSize; i++) {
                 bufferedPrevResults.add(bufferedResults.removeFirst());
             }
-            return new ResultSet(
+            return new ResultSetImpl(
                     ResultSet.ResultType.PAYLOAD,
                     currentToken,
                     resultSchema,
-                    new ArrayList<>(bufferedPrevResults));
+                    new ArrayList<>(bufferedPrevResults),
+                    converter,
+                    isQueryResult,
+                    jobID,
+                    resultKind);
         } else if (token == currentToken - 1 && token >= 0) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug(
@@ -190,11 +340,15 @@ public class ResultFetcher {
                 }
                 throw new SqlExecutionException(msg);
             }
-            return new ResultSet(
+            return new ResultSetImpl(
                     ResultSet.ResultType.PAYLOAD,
                     currentToken,
                     resultSchema,
-                    new ArrayList<>(bufferedPrevResults));
+                    new ArrayList<>(bufferedPrevResults),
+                    converter,
+                    isQueryResult,
+                    jobID,
+                    resultKind);
         } else {
             String msg;
             if (currentToken == 0) {

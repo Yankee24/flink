@@ -34,7 +34,7 @@ import org.apache.flink.test.util.JobSubmission;
 import org.apache.flink.test.util.SQLJobSubmission;
 import org.apache.flink.util.function.RunnableWithException;
 
-import org.apache.flink.shaded.guava30.com.google.common.collect.Lists;
+import org.apache.flink.shaded.guava33.com.google.common.collect.Lists;
 
 import org.junit.jupiter.api.extension.AfterAllCallback;
 import org.junit.jupiter.api.extension.BeforeAllCallback;
@@ -253,6 +253,11 @@ public class FlinkContainers implements BeforeAllCallback, AfterAllCallback {
     /** Gets JobManager container. */
     public GenericContainer<?> getJobManager() {
         return this.jobManager;
+    }
+
+    /** Gets TaskManager containers. */
+    public List<GenericContainer<?>> getTaskManagers() {
+        return this.taskManagers;
     }
 
     /** Gets JobManager's hostname on the host machine. */
