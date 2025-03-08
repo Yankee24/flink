@@ -19,7 +19,6 @@
 package org.apache.flink.runtime.rest.handler.job;
 
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.metrics.dump.MetricDump;
@@ -41,6 +40,7 @@ import org.apache.flink.runtime.webmonitor.TestingRestfulGateway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -119,7 +119,7 @@ class JobVertexBackPressureHandlerTest {
         jobVertexBackPressureHandler =
                 new JobVertexBackPressureHandler(
                         () -> CompletableFuture.completedFuture(restfulGateway),
-                        Time.seconds(10),
+                        Duration.ofSeconds(10),
                         Collections.emptyMap(),
                         JobVertexBackPressureHeaders.getInstance(),
                         new MetricFetcher() {
@@ -285,21 +285,21 @@ class JobVertexBackPressureHandlerTest {
         for (MetricDump metricDump : getMultipleAttemptsMetricDumps()) {
             multipleAttemptsMetricStore.add(metricDump);
         }
-        // Update currentExecutionAttempts directly without JobDetails.
-        Map<Integer, Integer> currentExecutionAttempts = new HashMap<>();
-        currentExecutionAttempts.put(0, 1);
-        currentExecutionAttempts.put(1, 0);
+        // Update representativeAttempts directly without JobDetails.
+        Map<Integer, Integer> representativeAttempts = new HashMap<>();
+        representativeAttempts.put(0, 1);
+        representativeAttempts.put(1, 0);
         multipleAttemptsMetricStore
-                .getCurrentExecutionAttempts()
+                .getRepresentativeAttempts()
                 .put(
                         TEST_JOB_ID_BACK_PRESSURE_STATS_AVAILABLE.toString(),
                         Collections.singletonMap(
-                                TEST_JOB_VERTEX_ID.toString(), currentExecutionAttempts));
+                                TEST_JOB_VERTEX_ID.toString(), representativeAttempts));
 
         JobVertexBackPressureHandler jobVertexBackPressureHandler =
                 new JobVertexBackPressureHandler(
                         () -> CompletableFuture.completedFuture(restfulGateway),
-                        Time.seconds(10),
+                        Duration.ofSeconds(10),
                         Collections.emptyMap(),
                         JobVertexBackPressureHeaders.getInstance(),
                         new MetricFetcher() {

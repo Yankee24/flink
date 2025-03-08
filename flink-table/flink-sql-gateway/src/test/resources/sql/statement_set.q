@@ -120,39 +120,13 @@ Sink(table=[default_catalog.default_database.StreamingTable], fields=[EXPR$0, EX
 +- Reused(reference_id=[1])
 !ok
 
-# test only to verify the test job id.
-SET '$internal.pipeline.job-id' = 'a5513ca0a886c6c9bafaf3acac43bfa5';
-!output
-+--------+
-| result |
-+--------+
-|     OK |
-+--------+
-1 row in set
-!ok
-
 EXECUTE STATEMENT SET BEGIN
 INSERT INTO StreamingTable SELECT * FROM (VALUES (1, 'Hello World'), (2, 'Hi'), (2, 'Hi'), (3, 'Hello'), (3, 'World'), (4, 'ADD'), (5, 'LINE'));
 INSERT INTO StreamingTable2 SELECT * FROM (VALUES (1, 'Hello World'), (2, 'Hi'), (2, 'Hi'), (3, 'Hello'), (3, 'World'), (4, 'ADD'), (5, 'LINE'));
 END;
 !output
-+----------------------------------+
-|                           job id |
-+----------------------------------+
-| a5513ca0a886c6c9bafaf3acac43bfa5 |
-+----------------------------------+
-1 row in set
-!ok
-
-RESET '$internal.pipeline.job-id';
-!output
-+--------+
-| result |
-+--------+
-|     OK |
-+--------+
-1 row in set
-!ok
+Job ID:
+!info
 
 SELECT * FROM StreamingTable;
 !output
@@ -189,7 +163,7 @@ SELECT * FROM StreamingTable2;
 EXPLAIN STATEMENT SET BEGIN
 END;
 !output
-org.apache.flink.sql.parser.impl.ParseException: Encountered "END" at line 2, column 1.
+org.apache.flink.sql.parser.impl.ParseException: Encountered "END" at line 0, column 1.
 Was expecting one of:
     "INSERT" ...
     "UPSERT" ...
@@ -198,7 +172,7 @@ Was expecting one of:
 EXECUTE STATEMENT SET BEGIN
 END;
 !output
-org.apache.flink.sql.parser.impl.ParseException: Encountered "END" at line 2, column 1.
+org.apache.flink.sql.parser.impl.ParseException: Encountered "END" at line 0, column 1.
 Was expecting one of:
     "INSERT" ...
     "UPSERT" ...
@@ -234,7 +208,6 @@ str string
 +--------+
 1 row in set
 !ok
-
 
 create table BatchTable2 (
 id int,
@@ -285,40 +258,14 @@ Sink(table=[default_catalog.default_database.BatchTable2], fields=[EXPR$0, EXPR$
 +- Reused(reference_id=[1])
 !ok
 
-# test only to verify the test job id.
-SET '$internal.pipeline.job-id' = '2e2dc0a5a6315296062ba81eba340668';
-!output
-+--------+
-| result |
-+--------+
-|     OK |
-+--------+
-1 row in set
-!ok
-
 EXECUTE STATEMENT SET
 BEGIN
 INSERT INTO BatchTable SELECT * FROM (VALUES (1, 'Hello World'), (2, 'Hi'), (2, 'Hi'), (3, 'Hello'), (3, 'World'), (4, 'ADD'), (5, 'LINE'));
 INSERT INTO BatchTable SELECT * FROM (VALUES (1, 'Hello World'), (2, 'Hi'), (2, 'Hi'), (3, 'Hello'), (3, 'World'), (4, 'ADD'), (5, 'LINE'));
 END;
 !output
-+----------------------------------+
-|                           job id |
-+----------------------------------+
-| 2e2dc0a5a6315296062ba81eba340668 |
-+----------------------------------+
-1 row in set
-!ok
-
-RESET '$internal.pipeline.job-id';
-!output
-+--------+
-| result |
-+--------+
-|     OK |
-+--------+
-1 row in set
-!ok
+Job ID:
+!info
 
 SELECT * FROM BatchTable;
 !output
@@ -351,7 +298,7 @@ Empty set
 EXPLAIN STATEMENT SET BEGIN
 END;
 !output
-org.apache.flink.sql.parser.impl.ParseException: Encountered "END" at line 2, column 1.
+org.apache.flink.sql.parser.impl.ParseException: Encountered "END" at line 0, column 1.
 Was expecting one of:
     "INSERT" ...
     "UPSERT" ...
@@ -360,7 +307,7 @@ Was expecting one of:
 EXECUTE STATEMENT SET BEGIN
 END;
 !output
-org.apache.flink.sql.parser.impl.ParseException: Encountered "END" at line 2, column 1.
+org.apache.flink.sql.parser.impl.ParseException: Encountered "END" at line 0, column 1.
 Was expecting one of:
     "INSERT" ...
     "UPSERT" ...

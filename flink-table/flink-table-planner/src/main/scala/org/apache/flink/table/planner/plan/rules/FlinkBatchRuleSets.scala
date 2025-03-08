@@ -36,7 +36,7 @@ object FlinkBatchRuleSets {
     FlinkRewriteSubQueryRule.FILTER,
     FlinkSubQueryRemoveRule.FILTER,
     JoinConditionTypeCoerceRule.INSTANCE,
-    FlinkJoinPushExpressionsRule.INSTANCE
+    CoreRules.JOIN_PUSH_EXPRESSIONS
   )
 
   /** Convert sub-queries before query decorrelation. */
@@ -115,11 +115,12 @@ object FlinkBatchRuleSets {
         new CoerceInputsRule(classOf[LogicalMinus], false),
         ConvertToNotInOrInRule.INSTANCE,
         // optimize limit 0
-        FlinkLimit0RemoveRule.INSTANCE,
+        PruneEmptyRules.SORT_FETCH_ZERO_INSTANCE,
         // fix: FLINK-28986 nested filter pattern causes unnest rule mismatch
         CoreRules.FILTER_MERGE,
         // unnest rule
         LogicalUnnestRule.INSTANCE,
+        UncollectToTableFunctionScanRule.INSTANCE,
         // Wrap arguments for JSON aggregate functions
         WrapJsonAggFunctionArgumentsRule.INSTANCE
       )).asJava)
@@ -133,7 +134,7 @@ object FlinkBatchRuleSets {
     // push filter through an aggregation
     CoreRules.FILTER_AGGREGATE_TRANSPOSE,
     // push a filter past a project
-    CoreRules.FILTER_PROJECT_TRANSPOSE,
+    FlinkFilterProjectTransposeRule.INSTANCE,
     CoreRules.FILTER_SET_OP_TRANSPOSE,
     CoreRules.FILTER_MERGE
   )
@@ -178,7 +179,7 @@ object FlinkBatchRuleSets {
     PruneEmptyRules.AGGREGATE_INSTANCE,
     PruneEmptyRules.FILTER_INSTANCE,
     PruneEmptyRules.JOIN_LEFT_INSTANCE,
-    FlinkPruneEmptyRules.JOIN_RIGHT_INSTANCE,
+    PruneEmptyRules.JOIN_RIGHT_INSTANCE,
     PruneEmptyRules.PROJECT_INSTANCE,
     PruneEmptyRules.SORT_INSTANCE,
     PruneEmptyRules.UNION_INSTANCE
@@ -196,7 +197,7 @@ object FlinkBatchRuleSets {
     // push a projection to the children of a semi/anti Join
     ProjectSemiAntiJoinTransposeRule.INSTANCE,
     // merge projections
-    CoreRules.PROJECT_MERGE,
+    FlinkProjectMergeRule.INSTANCE,
     // remove identity project
     CoreRules.PROJECT_REMOVE,
     // removes constant keys from an Agg
@@ -227,7 +228,7 @@ object FlinkBatchRuleSets {
     // equi-join predicates transfer
     RewriteMultiJoinConditionRule.INSTANCE,
     // join reorder
-    CoreRules.MULTI_JOIN_OPTIMIZE
+    FlinkJoinReorderRule.INSTANCE
   )
 
   /** RuleSet to do logical optimize. This RuleSet is a sub-set of [[LOGICAL_OPT_RULES]]. */
@@ -245,7 +246,7 @@ object FlinkBatchRuleSets {
     CoreRules.SORT_REMOVE,
 
     // join rules
-    FlinkJoinPushExpressionsRule.INSTANCE,
+    CoreRules.JOIN_PUSH_EXPRESSIONS,
     SimplifyJoinConditionRule.INSTANCE,
 
     // remove union with only a single child
@@ -254,7 +255,7 @@ object FlinkBatchRuleSets {
     CoreRules.UNION_TO_DISTINCT,
 
     // aggregation and projection rules
-    CoreRules.AGGREGATE_PROJECT_MERGE,
+    FlinkAggregateProjectMergeRule.INSTANCE,
     CoreRules.AGGREGATE_PROJECT_PULL_UP_CONSTANTS,
 
     // remove aggregation if it does not aggregate and input is already distinct
@@ -287,8 +288,8 @@ object FlinkBatchRuleSets {
     ConstantRankNumberColumnRemoveRule.INSTANCE,
 
     // calc rules
-    CoreRules.FILTER_CALC_MERGE,
-    CoreRules.PROJECT_CALC_MERGE,
+    FlinkFilterCalcMergeRule.INSTANCE,
+    FlinkProjectCalcMergeRule.INSTANCE,
     CoreRules.FILTER_TO_CALC,
     CoreRules.PROJECT_TO_CALC,
     FlinkCalcMergeRule.INSTANCE,
@@ -433,18 +434,13 @@ object FlinkBatchRuleSets {
 
   /** RuleSet to optimize plans after batch exec execution. */
   val PHYSICAL_REWRITE: RuleSet = RuleSets.ofList(
-    (RuleSets
-      .ofList(
-        EnforceLocalHashAggRule.INSTANCE,
-        EnforceLocalSortAggRule.INSTANCE,
-        PushLocalHashAggIntoScanRule.INSTANCE,
-        PushLocalHashAggWithCalcIntoScanRule.INSTANCE,
-        PushLocalSortAggIntoScanRule.INSTANCE,
-        PushLocalSortAggWithSortIntoScanRule.INSTANCE,
-        PushLocalSortAggWithCalcIntoScanRule.INSTANCE,
-        PushLocalSortAggWithSortAndCalcIntoScanRule.INSTANCE
-      )
-      .asScala ++
-      DynamicPartitionPruningRule.DYNAMIC_PARTITION_PRUNING_RULES.asScala).asJava
+    EnforceLocalHashAggRule.INSTANCE,
+    EnforceLocalSortAggRule.INSTANCE,
+    PushLocalHashAggIntoScanRule.INSTANCE,
+    PushLocalHashAggWithCalcIntoScanRule.INSTANCE,
+    PushLocalSortAggIntoScanRule.INSTANCE,
+    PushLocalSortAggWithSortIntoScanRule.INSTANCE,
+    PushLocalSortAggWithCalcIntoScanRule.INSTANCE,
+    PushLocalSortAggWithSortAndCalcIntoScanRule.INSTANCE
   )
 }

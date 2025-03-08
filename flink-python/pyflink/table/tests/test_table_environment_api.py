@@ -27,14 +27,14 @@ from pyflink.common import RowKind, WatermarkStrategy, Configuration
 from pyflink.common.serializer import TypeSerializer
 from pyflink.common.typeinfo import Types
 from pyflink.common.watermark_strategy import TimestampAssigner
-from pyflink.datastream import MergingWindowAssigner, TimeWindow, Trigger, TriggerResult
-from pyflink.datastream.functions import WindowFunction
+from pyflink.datastream import MergingWindowAssigner, TimeWindow, Trigger, TriggerResult, OutputTag
+from pyflink.datastream.functions import WindowFunction, ProcessFunction
 from pyflink.datastream.tests.test_util import DataStreamTestSinkFunction
 from pyflink.datastream.window import TimeWindowSerializer
 from pyflink.java_gateway import get_gateway
 from pyflink.table import (DataTypes, StreamTableEnvironment, EnvironmentSettings, Module,
-                           ResultKind, ModuleEntry)
-from pyflink.table.catalog import ObjectPath, CatalogBaseTable
+                           ResultKind, ModuleEntry, Schema)
+from pyflink.table.catalog import ObjectPath, CatalogBaseTable, CatalogDescriptor
 from pyflink.table.explain_detail import ExplainDetail
 from pyflink.table.expressions import col, source_watermark
 from pyflink.table.table_descriptor import TableDescriptor
@@ -67,6 +67,11 @@ class TableEnvironmentTest(PyFlinkUTTestCase):
 
         assert isinstance(actual, str)
 
+    def test_explain_sql(self):
+        t_env = self.t_env
+        actual = t_env.explain_sql("SELECT * FROM (VALUES ('a', 1))")
+        assert isinstance(actual, str)
+
     def test_explain_with_extended(self):
         schema = RowType() \
             .add('a', DataTypes.INT()) \
@@ -77,8 +82,19 @@ class TableEnvironmentTest(PyFlinkUTTestCase):
         result = t.select(t.a + 1, t.b, t.c)
 
         actual = result.explain(ExplainDetail.ESTIMATED_COST, ExplainDetail.CHANGELOG_MODE,
-                                ExplainDetail.JSON_EXECUTION_PLAN)
+                                ExplainDetail.JSON_EXECUTION_PLAN, ExplainDetail.PLAN_ADVICE)
 
+        assert isinstance(actual, str)
+
+    def test_explain_sql_extended(self):
+        t_env = self.t_env
+        actual = t_env.explain_sql(
+            "SELECT * FROM (VALUES ('a', 1))",
+            ExplainDetail.ESTIMATED_COST,
+            ExplainDetail.CHANGELOG_MODE,
+            ExplainDetail.JSON_EXECUTION_PLAN,
+            ExplainDetail.PLAN_ADVICE
+        )
         assert isinstance(actual, str)
 
     def test_register_functions(self):
@@ -152,7 +168,7 @@ class TableEnvironmentTest(PyFlinkUTTestCase):
             get_gateway().jvm.org.apache.flink.table.module.CoreModule.INSTANCE))
         table_result = t_env.execute_sql("select concat('unload', 'load') as test_module")
         self.assertEqual(table_result.get_result_kind(), ResultKind.SUCCESS_WITH_CONTENT)
-        self.assert_equals(table_result.get_table_schema().get_field_names(), ['test_module'])
+        self.assert_equals(table_result.get_resolved_schema().get_column_names(), ['test_module'])
 
     def test_create_and_drop_java_function(self):
         t_env = self.t_env
@@ -172,61 +188,78 @@ class TableEnvironmentTest(PyFlinkUTTestCase):
         self.assert_equals(t_env.list_user_defined_functions(), [])
 
     def test_create_temporary_table_from_descriptor(self):
-        from pyflink.table.schema import Schema
-
-        t_env = self.t_env
-        catalog = t_env.get_current_catalog()
-        database = t_env.get_current_database()
         schema = Schema.new_builder().column("f0", DataTypes.INT()).build()
-        t_env.create_temporary_table(
+
+        self.assert_created_temporary_table_from_descriptor(schema)
+
+    def test_create_temporary_table_if_not_exists_from_descriptor(self):
+        schema = Schema.new_builder().column("f0", DataTypes.INT()).build()
+
+        self.assert_created_temporary_table_from_descriptor(schema)
+
+        # This should be a no-op and throw no exception
+        self.t_env.create_temporary_table(
             "T",
             TableDescriptor.for_connector("fake")
-             .schema(schema)
-             .option("a", "Test")
-             .build())
+            .schema(schema)
+            .option("a", "Test")
+            .build(),
+            True)
 
-        self.assertFalse(t_env.get_catalog(catalog).table_exists(ObjectPath(database, "T")))
-        gateway = get_gateway()
+        with self.assertRaises(Exception) as error_context:
+            self.t_env.create_temporary_table(
+                "T",
+                TableDescriptor.for_connector("fake")
+                .schema(schema)
+                .option("a", "Test")
+                .build(),
+                False)
 
-        catalog_table = CatalogBaseTable(
-            t_env._j_tenv.getCatalogManager()
-                 .getTable(gateway.jvm.ObjectIdentifier.of(catalog, database, "T"))
-                 .get()
-                 .getTable())
-        self.assertEqual(schema, catalog_table.get_unresolved_schema())
-        self.assertEqual("fake", catalog_table.get_options().get("connector"))
-        self.assertEqual("Test", catalog_table.get_options().get("a"))
+        error_msg = str(error_context.exception)
+        self.assertIn("Temporary table '`default_catalog`.`default_database`.`T`' already exists",
+                      error_msg)
 
     def test_create_table_from_descriptor(self):
-        from pyflink.table.schema import Schema
-
-        catalog = self.t_env.get_current_catalog()
-        database = self.t_env.get_current_database()
         schema = Schema.new_builder().column("f0", DataTypes.INT()).build()
+
+        self.assert_created_table_from_descriptor(schema)
+
+    def test_create_table_ignore_if_exists_from_descriptor(self):
+        schema = Schema.new_builder().column("f0", DataTypes.INT()).build()
+        self.assert_created_table_from_descriptor(schema)
+
+        # This should be a no-op and throw no exception
         self.t_env.create_table(
             "T",
             TableDescriptor.for_connector("fake")
-                  .schema(schema)
-                  .option("a", "Test")
-                  .build())
-        object_path = ObjectPath(database, "T")
-        self.assertTrue(self.t_env.get_catalog(catalog).table_exists(object_path))
+            .schema(schema)
+            .option("a", "Test")
+            .build(),
+            True)
 
-        catalog_table = self.t_env.get_catalog(catalog).get_table(object_path)
-        self.assertEqual(schema, catalog_table.get_unresolved_schema())
-        self.assertEqual("fake", catalog_table.get_options().get("connector"))
-        self.assertEqual("Test", catalog_table.get_options().get("a"))
+        with self.assertRaises(Exception) as error_context:
+            self.t_env.create_table(
+                "T",
+                TableDescriptor.for_connector("fake")
+                .schema(schema)
+                .option("a", "Test")
+                .build(),
+                False)
+
+        error_msg = str(error_context.exception)
+        self.assertIn(
+            "Could not execute CreateTable in path `default_catalog`.`default_database`.`T`",
+            error_msg)
 
     def test_table_from_descriptor(self):
-        from pyflink.table.schema import Schema
-
         schema = Schema.new_builder().column("f0", DataTypes.INT()).build()
         descriptor = TableDescriptor.for_connector("fake").schema(schema).build()
 
         table = self.t_env.from_descriptor(descriptor)
         self.assertEqual(schema,
-                         Schema(Schema.new_builder()._j_builder
-                                .fromResolvedSchema(table._j_table.getResolvedSchema()).build()))
+                         Schema.new_builder().from_resolved_schema(
+                             table.get_resolved_schema()
+                         ).build())
         contextResolvedTable = table._j_table.getQueryOperation().getContextResolvedTable()
         options = contextResolvedTable.getTable().getOptions()
         self.assertEqual("fake", options.get("connector"))
@@ -310,6 +343,48 @@ class TableEnvironmentTest(PyFlinkUTTestCase):
             Py4JJavaError, "No module with name 'dummy' exists",
             self.t_env.use_modules, 'core', 'dummy')
 
+    def assert_created_table_from_descriptor(self, schema: Schema):
+        catalog = self.t_env.get_current_catalog()
+        database = self.t_env.get_current_database()
+
+        self.t_env.create_table(
+            "T",
+            TableDescriptor.for_connector("fake")
+            .schema(schema)
+            .option("a", "Test")
+            .build())
+
+        object_path = ObjectPath(database, "T")
+        self.assertTrue(self.t_env.get_catalog(catalog).table_exists(object_path))
+
+        catalog_table = self.t_env.get_catalog(catalog).get_table(object_path)
+        self.assertEqual(schema, catalog_table.get_unresolved_schema())
+        self.assertEqual("fake", catalog_table.get_options().get("connector"))
+        self.assertEqual("Test", catalog_table.get_options().get("a"))
+
+    def assert_created_temporary_table_from_descriptor(self, schema: Schema):
+        catalog = self.t_env.get_current_catalog()
+        database = self.t_env.get_current_database()
+
+        self.t_env.create_temporary_table(
+            "T",
+            TableDescriptor.for_connector("fake")
+            .schema(schema)
+            .option("a", "Test")
+            .build())
+
+        self.assertFalse(self.t_env.get_catalog(catalog).table_exists(ObjectPath(database, "T")))
+        gateway = get_gateway()
+
+        catalog_table = CatalogBaseTable(
+            self.t_env._j_tenv.getCatalogManager()
+            .getTable(gateway.jvm.ObjectIdentifier.of(catalog, database, "T"))
+            .get()
+            .getTable())
+        self.assertEqual(schema, catalog_table.get_unresolved_schema())
+        self.assertEqual("fake", catalog_table.get_options().get("connector"))
+        self.assertEqual("Test", catalog_table.get_options().get("a"))
+
 
 class DataStreamConversionTestCases(PyFlinkUTTestCase):
 
@@ -318,7 +393,7 @@ class DataStreamConversionTestCases(PyFlinkUTTestCase):
 
         super(DataStreamConversionTestCases, self).setUp()
         config = Configuration()
-        config.set_string("akka.ask.timeout", "20 s")
+        config.set_string("pekko.ask.timeout", "20 s")
         self.env = StreamExecutionEnvironment.get_execution_environment(config)
         self.t_env = StreamTableEnvironment.create(self.env)
 
@@ -333,10 +408,11 @@ class DataStreamConversionTestCases(PyFlinkUTTestCase):
         self.assertEqual("""(
   `f0` RAW('[B', '...')
 )""",
-                         result._j_table_result.getResolvedSchema().toString())
+                         str(result.get_resolved_schema()))
         with result.collect() as result:
             collected_result = [str(item) for item in result]
-            expected_result = [item for item in map(str, [Row(1), Row(2), Row(3), Row(4), Row(5)])]
+            expected_result = [item for item
+                               in map(str, [Row((1,)), Row((2,)), Row((3,)), Row((4,)), Row((5,))])]
             expected_result.sort()
             collected_result.sort()
             self.assertEqual(expected_result, collected_result)
@@ -349,6 +425,23 @@ class DataStreamConversionTestCases(PyFlinkUTTestCase):
         results = self.test_sink.get_results(False)
         results.sort()
         expected = ['+I[1]', '+I[2]', '+I[3]']
+        self.assertEqual(expected, results)
+
+    def test_to_data_stream_local_time(self):
+        self.t_env.execute_sql("""
+        CREATE TEMPORARY VIEW v0 AS
+        SELECT f0, f1, f2, f3 FROM ( VALUES
+            ( 1, DATE'1970-01-02', TIME'03:04:05', TIMESTAMP'1970-01-02 03:04:05' ),
+            ( 2, DATE'1970-06-07', TIME'08:09:10', TIMESTAMP'1970-06-07 08:09:10' )
+        ) AS t0 ( f0, f1, f2, f3 )
+        """)
+        v0 = self.t_env.from_path("v0")
+        self.t_env.to_data_stream(v0).key_by(lambda r: r['f0']).add_sink(self.test_sink)
+        self.env.execute()
+        results = self.test_sink.get_results(False)
+        results.sort()
+        expected = ['+I[1, 1970-01-02, 03:04:05, 1970-01-02T03:04:05]',
+                    '+I[2, 1970-06-07, 08:09:10, 1970-06-07T08:09:10]']
         self.assertEqual(expected, results)
 
     def test_from_data_stream(self):
@@ -381,8 +474,6 @@ class DataStreamConversionTestCases(PyFlinkUTTestCase):
         self.assert_equals(result, expected)
 
     def test_from_data_stream_with_schema(self):
-        from pyflink.table import Schema
-
         ds = self.env.from_collection([(1, 'Hi', 'Hello'), (2, 'Hello', 'Hi')],
                                       type_info=Types.ROW_NAMED(
                                           ["a", "b", "c"],
@@ -427,7 +518,7 @@ class DataStreamConversionTestCases(PyFlinkUTTestCase):
   `rowtime` TIMESTAMP_LTZ(3) *ROWTIME* METADATA,
   WATERMARK FOR `rowtime`: TIMESTAMP_LTZ(3) AS SOURCE_WATERMARK()
 )""",
-                         table._j_table.getResolvedSchema().toString())
+                         str(table.get_resolved_schema()))
         self.t_env.create_temporary_view("t",
                                          ds,
                                          Schema.new_builder()
@@ -542,6 +633,38 @@ class DataStreamConversionTestCases(PyFlinkUTTestCase):
         expected = ["(True, Row(f0=1, f1='Hello'))", "(False, Row(f0=1, f1='Hello'))",
                     "(True, Row(f0=2, f1='Hello'))"]
         self.assertEqual(result, expected)
+
+    def test_side_output_stream_to_table(self):
+        tag = OutputTag("side", Types.ROW([Types.INT()]))
+
+        class MyProcessFunction(ProcessFunction):
+
+            def process_element(self, value, ctx):
+                yield Row(value)
+                yield tag, Row(value * 2)
+
+        ds = self.env.from_collection([1, 2, 3], Types.INT()).process(MyProcessFunction())
+        ds_side = ds.get_side_output(tag)
+        expected = ['<Row(2)>', '<Row(4)>', '<Row(6)>']
+
+        t = self.t_env.from_data_stream(ds_side)
+        result = [str(i) for i in t.execute().collect()]
+        result.sort()
+        self.assertEqual(expected, result)
+
+        self.t_env.create_temporary_view("side_table", ds_side)
+        table_result = self.t_env.execute_sql("SELECT * FROM side_table")
+        result = [str(i) for i in table_result.collect()]
+        result.sort()
+        self.assertEqual(expected, result)
+
+    def test_create_catalog(self):
+        config = Configuration()
+        config.set_string("type", "generic_in_memory")
+        catalog_desc = CatalogDescriptor.of("mycat", config, None)
+        self.t_env.create_catalog("mycat", catalog_desc)
+        mycat = self.t_env.get_catalog("mycat")
+        self.assertIsNotNone(mycat)
 
 
 class StreamTableEnvironmentTests(PyFlinkStreamTableTestCase):

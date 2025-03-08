@@ -25,6 +25,9 @@ import org.apache.flink.runtime.taskexecutor.partition.ClusterPartitionReport;
 import org.apache.flink.util.CollectionUtil;
 import org.apache.flink.util.Preconditions;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
@@ -32,12 +35,17 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static java.util.stream.Collectors.toList;
+
 /**
  * Utility for tracking partitions and issuing release calls to task executors and shuffle masters.
  */
 public class TaskExecutorPartitionTrackerImpl
         extends AbstractPartitionTracker<JobID, TaskExecutorPartitionInfo>
         implements TaskExecutorPartitionTracker {
+
+    private static final Logger LOG =
+            LoggerFactory.getLogger(TaskExecutorPartitionTrackerImpl.class);
 
     private final Map<IntermediateDataSetID, DataSetEntry> clusterPartitions = new HashMap<>();
     private final ShuffleEnvironment<?, ?> shuffleEnvironment;
@@ -58,6 +66,7 @@ public class TaskExecutorPartitionTrackerImpl
     @Override
     public void stopTrackingAndReleaseJobPartitions(
             Collection<ResultPartitionID> partitionsToRelease) {
+        LOG.debug("Releasing Job Partitions {}", partitionsToRelease);
         if (partitionsToRelease.isEmpty()) {
             return;
         }
@@ -72,11 +81,27 @@ public class TaskExecutorPartitionTrackerImpl
                 CollectionUtil.project(
                         stopTrackingPartitionsFor(producingJobId),
                         PartitionTrackerEntry::getResultPartitionId);
+        LOG.debug("Releasing Job Partitions {} for job {}", partitionsForJob, producingJobId);
         shuffleEnvironment.releasePartitionsLocally(partitionsForJob);
     }
 
     @Override
+    public Collection<TaskExecutorPartitionInfo> getTrackedPartitionsFor(JobID producingJobId) {
+        return partitionTable.getTrackedPartitions(producingJobId).stream()
+                .map(
+                        partitionId -> {
+                            final PartitionInfo<JobID, TaskExecutorPartitionInfo> partitionInfo =
+                                    partitionInfos.get(partitionId);
+                            Preconditions.checkNotNull(partitionInfo);
+                            return partitionInfo.getMetaInfo();
+                        })
+                .collect(toList());
+    }
+
+    @Override
     public void promoteJobPartitions(Collection<ResultPartitionID> partitionsToPromote) {
+        LOG.debug("Promoting Job Partitions {}", partitionsToPromote);
+
         if (partitionsToPromote.isEmpty()) {
             return;
         }

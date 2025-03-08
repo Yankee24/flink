@@ -18,13 +18,13 @@
 
 package org.apache.flink.runtime.executiongraph;
 
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.core.io.InputSplit;
 import org.apache.flink.runtime.execution.ExecutionState;
 import org.apache.flink.runtime.jobmaster.LogicalSlot;
 import org.apache.flink.runtime.taskmanager.TaskManagerLocation;
 import org.apache.flink.util.concurrent.FutureUtils;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -37,7 +37,6 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.runtime.execution.ExecutionState.FAILED;
-import static org.apache.flink.runtime.execution.ExecutionState.FINISHED;
 import static org.apache.flink.util.Preconditions.checkNotNull;
 import static org.apache.flink.util.Preconditions.checkState;
 
@@ -54,7 +53,7 @@ public class SpeculativeExecutionVertex extends ExecutionVertex {
             ExecutionJobVertex jobVertex,
             int subTaskIndex,
             IntermediateResult[] producedDataSets,
-            Time timeout,
+            Duration timeout,
             long createTimestamp,
             int executionHistorySizeLimit,
             int initialAttemptCount) {
@@ -73,12 +72,8 @@ public class SpeculativeExecutionVertex extends ExecutionVertex {
         this.nextInputSplitIndexToConsumeByAttempts = new HashMap<>();
     }
 
-    public boolean containsSources() {
-        return getJobVertex().getJobVertex().containsSources();
-    }
-
-    public boolean containsSinks() {
-        return getJobVertex().getJobVertex().containsSinks();
+    public boolean isSupportsConcurrentExecutionAttempts() {
+        return getJobVertex().getJobVertex().isSupportsConcurrentExecutionAttempts();
     }
 
     public Execution createNewSpeculativeExecution(final long timestamp) {
@@ -108,11 +103,7 @@ public class SpeculativeExecutionVertex extends ExecutionVertex {
 
     @Override
     public Execution getPartitionProducer() {
-        final Execution finishedExecution = getCurrentExecutionAttempt();
-        checkState(
-                finishedExecution.getState() == FINISHED,
-                "It's not allowed to get the partition producer of an un-finished SpeculativeExecutionVertex");
-        return finishedExecution;
+        return getCurrentExecutionAttempt();
     }
 
     @Override
@@ -218,8 +209,8 @@ public class SpeculativeExecutionVertex extends ExecutionVertex {
     private int getStatePriority(ExecutionState state) {
         // the more likely to reach FINISHED state, the higher priority, the smaller value
         switch (state) {
-                // CREATED/SCHEDULED/INITIALIZING/RUNNING/FINISHED are healthy states with an
-                // increasing priority
+            // CREATED/SCHEDULED/INITIALIZING/RUNNING/FINISHED are healthy states with an
+            // increasing priority
             case FINISHED:
                 return 0;
             case RUNNING:
@@ -232,8 +223,8 @@ public class SpeculativeExecutionVertex extends ExecutionVertex {
                 return 4;
             case CREATED:
                 return 5;
-                // if the vertex is not in a healthy state, shows its CANCELING state unless it is
-                // fully FAILED or CANCELED
+            // if the vertex is not in a healthy state, shows its CANCELING state unless it is
+            // fully FAILED or CANCELED
             case CANCELING:
                 return 6;
             case FAILED:
@@ -291,8 +282,7 @@ public class SpeculativeExecutionVertex extends ExecutionVertex {
 
     @Override
     void cachePartitionInfo(PartitionInfo partitionInfo) {
-        throw new UnsupportedOperationException(
-                "Method is not supported in SpeculativeExecutionVertex.");
+        getCurrentExecutionAttempt().cachePartitionInfo(partitionInfo);
     }
 
     @Override
@@ -315,12 +305,6 @@ public class SpeculativeExecutionVertex extends ExecutionVertex {
 
     @Override
     public Optional<TaskManagerLocation> getPreferredLocationBasedOnState() {
-        throw new UnsupportedOperationException(
-                "Method is not supported in SpeculativeExecutionVertex.");
-    }
-
-    @Override
-    public CompletableFuture<TaskManagerLocation> getCurrentTaskManagerLocationFuture() {
         throw new UnsupportedOperationException(
                 "Method is not supported in SpeculativeExecutionVertex.");
     }

@@ -45,9 +45,6 @@ FlinkCEP是在Flink上层实现的复杂事件处理库。
 {{< tab "Java" >}}
 {{< artifact flink-cep >}}
 {{< /tab >}}
-{{< tab "Scala" >}}
-{{< artifact flink-cep-scala withScalaVersion >}}
-{{< /tab >}}
 {{< /tabs >}}
 
 {{< hint info >}}
@@ -66,28 +63,13 @@ FlinkCEP 不是二进制发布包的一部分。在集群上执行如何链接�
 ```java
 DataStream<Event> input = ...;
 
-Pattern<Event, ?> pattern = Pattern.<Event>begin("start").where(
-        new SimpleCondition<Event>() {
-            @Override
-            public boolean filter(Event event) {
-                return event.getId() == 42;
-            }
-        }
-    ).next("middle").subtype(SubEvent.class).where(
-        new SimpleCondition<SubEvent>() {
-            @Override
-            public boolean filter(SubEvent subEvent) {
-                return subEvent.getVolume() >= 10.0;
-            }
-        }
-    ).followedBy("end").where(
-         new SimpleCondition<Event>() {
-            @Override
-            public boolean filter(Event event) {
-                return event.getName().equals("end");
-            }
-         }
-    );
+Pattern<Event, ?> pattern = Pattern.<Event>begin("start")
+    .where(SimpleCondition.of(event -> event.getId() == 42))
+    .next("middle")
+    .subtype(SubEvent.class)
+    .where(SimpleCondition.of(subEvent -> subEvent.getVolume() >= 10.0))
+    .followedBy("end")
+    .where(SimpleCondition.of(event -> event.getName().equals("end")));
 
 PatternStream<Event> patternStream = CEP.pattern(input, pattern);
 
@@ -101,27 +83,6 @@ DataStream<Alert> result = patternStream.process(
             out.collect(createAlertFrom(pattern));
         }
     });
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-val input: DataStream[Event] = ...
-
-val pattern = Pattern.begin[Event]("start").where(_.getId == 42)
-  .next("middle").subtype(classOf[SubEvent]).where(_.getVolume >= 10.0)
-  .followedBy("end").where(_.getName == "end")
-
-val patternStream = CEP.pattern(input, pattern)
-
-val result: DataStream[Alert] = patternStream.process(
-    new PatternProcessFunction[Event, Alert]() {
-        override def processMatch(
-              `match`: util.Map[String, util.List[Event]],
-              ctx: PatternProcessFunction.Context,
-              out: Collector[Alert]): Unit = {
-            out.collect(createAlertFrom(pattern))
-        }
-    })
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -209,51 +170,6 @@ start.timesOrMore(2).optional();
 start.timesOrMore(2).optional().greedy();
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-// 期望出现4次
-start.times(4)
-
-// 期望出现0或者4次
-start.times(4).optional()
-
-// 期望出现2、3或者4次
-start.times(2, 4)
-
-// 期望出现2、3或者4次，并且尽可能的重复次数多
-start.times(2, 4).greedy()
-
-// 期望出现0、2、3或者4次
-start.times(2, 4).optional()
-
-// 期望出现0、2、3或者4次，并且尽可能的重复次数多
-start.times(2, 4).optional().greedy()
-
-// 期望出现1到多次
-start.oneOrMore()
-
-// 期望出现1到多次，并且尽可能的重复次数多
-start.oneOrMore().greedy()
-
-// 期望出现0到多次
-start.oneOrMore().optional()
-
-// 期望出现0到多次，并且尽可能的重复次数多
-start.oneOrMore().optional().greedy()
-
-// 期望出现2到多次
-start.timesOrMore(2)
-
-// 期望出现2到多次，并且尽可能的重复次数多
-start.timesOrMore(2).greedy()
-
-// 期望出现0、2或多次
-start.timesOrMore(2).optional()
-
-// 期望出现0、2或多次，并且尽可能的重复次数多
-start.timesOrMore(2).optional().greedy()
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 #### 条件
@@ -288,18 +204,6 @@ middle.oneOrMore()
     });
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-middle.oneOrMore()
-    .subtype(classOf[SubEvent])
-    .where(
-        (value, ctx) => {
-            lazy val sum = ctx.getEventsForPattern("middle").map(_.getPrice).sum
-            value.getName.startsWith("foo") && sum + value.getPrice < 5.0
-        }
-    )
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 {{< hint info >}}
@@ -314,17 +218,7 @@ middle.oneOrMore()
 {{< tabs "20073e8b-3772-4faf-894c-e1bf2cbff15e" >}}
 {{< tab "Java" >}}
 ```java
-start.where(new SimpleCondition<Event>() {
-    @Override
-    public boolean filter(Event value) {
-        return value.getName().startsWith("foo");
-    }
-});
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-start.where(event => event.getName.startsWith("foo"))
+start.where(SimpleCondition.of(value -> value.getName().startsWith("foo")));
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -334,17 +228,8 @@ start.where(event => event.getName.startsWith("foo"))
 {{< tabs "5011129d-6c43-4fb7-84ae-3000d2296f28" >}}
 {{< tab "Java" >}}
 ```java
-start.subtype(SubEvent.class).where(new SimpleCondition<SubEvent>() {
-    @Override
-    public boolean filter(SubEvent value) {
-        return ...; // 一些判断条件
-    }
-});
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-start.subtype(classOf[SubEvent]).where(subEvent => ... /* 一些判断条件 */)
+start.subtype(SubEvent.class)
+    .where(SimpleCondition.of(value -> ... /*一些判断条件*/));
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -355,22 +240,9 @@ start.subtype(classOf[SubEvent]).where(subEvent => ... /* 一些判断条件 */)
 {{< tabs "ba6bc50b-c9f6-4534-aff8-b2957ada791b" >}}
 {{< tab "Java" >}}
 ```java
-pattern.where(new SimpleCondition<Event>() {
-    @Override
-    public boolean filter(Event value) {
-        return ...; // 一些判断条件
-    }
-}).or(new SimpleCondition<Event>() {
-    @Override
-    public boolean filter(Event value) {
-        return ...; // 一些判断条件
-    }
-});
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-pattern.where(event => ... /* 一些判断条件 */).or(event => ... /* 一些判断条件 */)
+pattern
+    .where(SimpleCondition.of(value -> ... /*一些判断条件*/))
+    .or(SimpleCondition.of(value -> ... /*一些判断条件*/));
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -403,11 +275,6 @@ pattern.where(new IterativeCondition<Event>() {
 });
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-pattern.where(event => ... /* 一些判断条件 */)
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 #### `or(condition)`
@@ -430,12 +297,6 @@ pattern.where(new IterativeCondition<Event>() {
 });
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-pattern.where(event => ... /* 一些判断条件 */)
-    .or(event => ... /* 替代条件  */)
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 #### `until(condition)`
@@ -455,11 +316,6 @@ pattern.oneOrMore().until(new IterativeCondition<Event>() {
 });
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-pattern.oneOrMore().until(event => ... /* 一些判断条件 */)
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 #### `subtype(subClass)`
@@ -470,11 +326,6 @@ pattern.oneOrMore().until(event => ... /* 一些判断条件 */)
 {{< tab "Java" >}}
 ```java
 pattern.subtype(SubEvent.class);
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-pattern.subtype(classOf[SubEvent])
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -489,11 +340,6 @@ pattern.subtype(classOf[SubEvent])
 {{< tab "Java" >}}
 ```java
 pattern.oneOrMore();
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-pattern.oneOrMore()
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -523,11 +369,6 @@ pattern.timesOrMore(2);
 pattern.times(2);
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-pattern.times(2)
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 #### `times(#fromTimes, #toTimes)`
@@ -539,11 +380,6 @@ pattern.times(2)
 {{< tab "Java" >}}
 ```java
 pattern.times(2, 4);
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```java
-pattern.times(2, 4)
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -558,11 +394,6 @@ pattern.times(2, 4)
 pattern.oneOrMore().optional();
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```java
-pattern.oneOrMore().optional()
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 #### `greedy()`
@@ -573,11 +404,6 @@ pattern.oneOrMore().optional()
 {{< tab "Java" >}}
 ```java
 pattern.oneOrMore().greedy();
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```java
-pattern.oneOrMore().greedy()
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -592,11 +418,6 @@ pattern.oneOrMore().greedy()
 {{< tab "Java" >}}
 ```java
 Pattern<Event, ?> start = Pattern.<Event>begin("start");
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-val start : Pattern[Event, _] = Pattern.begin("start")
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -649,26 +470,6 @@ Pattern<Event, ?> relaxedNot = start.notFollowedBy("not").where(...);
 
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-
-// 严格连续
-val strict: Pattern[Event, _] = start.next("middle").where(...)
-
-// 松散连续
-val relaxed: Pattern[Event, _] = start.followedBy("middle").where(...)
-
-// 不确定的松散连续
-val nonDetermin: Pattern[Event, _] = start.followedByAny("middle").where(...)
-
-// 严格连续的NOT模式
-val strictNot: Pattern[Event, _] = start.notNext("not").where(...)
-
-// 松散连续的NOT模式
-val relaxedNot: Pattern[Event, _] = start.notFollowedBy("not").where(...)
-
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 松散连续意味着跟着的事件中，只有第一个可匹配的事件会被匹配上，而不确定的松散连接情况下，有着同样起始的多个匹配会被输出。
@@ -691,12 +492,7 @@ val relaxedNot: Pattern[Event, _] = start.notFollowedBy("not").where(...)
 {{< tabs "8228f5b0-b6b3-4ca6-a56b-e5a8fd5fdc3b" >}}
 {{< tab "Java" >}}
 ```java
-next.within(Time.seconds(10));
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-next.within(Time.seconds(10))
+next.within(Duration.ofSeconds(10));
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -708,24 +504,11 @@ next.within(Time.seconds(10))
 {{< tab "Java" >}}
 ```java
 Pattern.<Event>begin("start")
-    .next("middle").where(new SimpleCondition<Event>() {
-    @Override
-    public boolean filter(Event value) throws Exception {
-        return value.getName().equals("a");
-    }
-}).notFollowedBy("end").where(new SimpleCondition<Event>() {
-    @Override
-    public boolean filter(Event value) throws Exception {
-        return value.getName().equals("b");
-    }
-}).within(Time.seconds(10));
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-Pattern.begin("start").where(_.getName().equals("a"))
-.notFollowedBy("end").where(_.getName == "b")
-.within(Time.seconds(10))
+    .next("middle")
+    .where(SimpleCondition.of(value -> value.getName().equals("a")))
+    .notFollowedBy("end")
+    .where(SimpleCondition.of(value -> value.getName().equals("b")))
+    .within(Duration.ofSeconds(10));
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -764,31 +547,22 @@ Pattern.begin("start").where(_.getName().equals("a"))
               也就是说，任何不匹配的事件都会终止匹配（和<code>next()</code>一样）。</p>
               <p>如果不使用它，那么就是松散连续（和<code>followedBy()</code>一样）。</p>
 
-              <p>例如，一个如下的模式：</p>
-```java
-Pattern.<Event>begin("start").where(new SimpleCondition<Event>() {
-  @Override
-  public boolean filter(Event value) throws Exception {
-    return value.getName().equals("c");
-  }
-})
-.followedBy("middle").where(new SimpleCondition<Event>() {
-  @Override
-  public boolean filter(Event value) throws Exception {
-    return value.getName().equals("a");
-  }
-}).oneOrMore().consecutive()
-.followedBy("end1").where(new SimpleCondition<Event>() {
-  @Override
-  public boolean filter(Event value) throws Exception {
-    return value.getName().equals("b");
-  }
-});
-```
-              <p>输入：C D A1 A2 A3 D A4 B，会产生下面的输出：</p>
+<p>例如，一个如下的模式：</p>
 
-              <p>如果施加严格连续性： {C A1 B}，{C A1 A2 B}，{C A1 A2 A3 B}</p>
-              <p>不施加严格连续性： {C A1 B}，{C A1 A2 B}，{C A1 A2 A3 B}，{C A1 A2 A3 A4 B}</p>
+```java
+Pattern.<Event>begin("start")
+    .where(SimpleCondition.of(value -> value.getName().equals("c")))
+    .followedBy("middle")
+    .where(SimpleCondition.of(value -> value.getName().equals("a")))
+    .oneOrMore()
+    .consecutive()
+    .followedBy("end1")
+    .where(SimpleCondition.of(value -> value.getName().equals("b")));
+```
+<p>输入：C D A1 A2 A3 D A4 B，会产生下面的输出：</p>
+
+<p>如果施加严格连续性： {C A1 B}，{C A1 A2 B}，{C A1 A2 A3 B}</p>
+<p>不施加严格连续性： {C A1 B}，{C A1 A2 B}，{C A1 A2 A3 B}，{C A1 A2 A3 A4 B}</p>
           </td>
        </tr>
        <tr>
@@ -798,87 +572,24 @@ Pattern.<Event>begin("start").where(new SimpleCondition<Event>() {
               在匹配的事件中间施加不确定松散连续性（和<code>followedByAny()</code>一样）。</p>
               <p>如果不使用，就是松散连续（和<code>followedBy()</code>一样）。</p>
 
-              <p>例如，一个如下的模式：</p>
-```java
-Pattern.<Event>begin("start").where(new SimpleCondition<Event>() {
-  @Override
-  public boolean filter(Event value) throws Exception {
-    return value.getName().equals("c");
-  }
-})
-.followedBy("middle").where(new SimpleCondition<Event>() {
-  @Override
-  public boolean filter(Event value) throws Exception {
-    return value.getName().equals("a");
-  }
-}).oneOrMore().allowCombinations()
-.followedBy("end1").where(new SimpleCondition<Event>() {
-  @Override
-  public boolean filter(Event value) throws Exception {
-    return value.getName().equals("b");
-  }
-});
-```
-               <p>输入：C D A1 A2 A3 D A4 B，会产生如下的输出：</p>
+<p>例如，一个如下的模式：</p>
 
-               <p>如果使用不确定松散连续： {C A1 B}，{C A1 A2 B}，{C A1 A3 B}，{C A1 A4 B}，{C A1 A2 A3 B}，{C A1 A2 A4 B}，{C A1 A3 A4 B}，{C A1 A2 A3 A4 B}</p>
-               <p>如果不使用：{C A1 B}，{C A1 A2 B}，{C A1 A2 A3 B}，{C A1 A2 A3 A4 B}</p>
+```java
+Pattern.<Event>begin("start")
+    .where(SimpleCondition.of(value -> value.getName().equals("c")))
+    .followedBy("middle")
+    .where(SimpleCondition.of(value -> value.getName().equals("a")))
+    .oneOrMore()
+    .allowCombinations()
+    .followedBy("end1")
+    .where(SimpleCondition.of(value -> value.getName().equals("b")));
+```
+<p>输入：C D A1 A2 A3 D A4 B，会产生如下的输出：</p>
+
+<p>如果使用不确定松散连续： {C A1 B}，{C A1 A2 B}，{C A1 A3 B}，{C A1 A4 B}，{C A1 A2 A3 B}，{C A1 A2 A4 B}，{C A1 A3 A4 B}，{C A1 A2 A3 A4 B}</p>
+<p>如果不使用：{C A1 B}，{C A1 A2 B}，{C A1 A2 A3 B}，{C A1 A2 A3 A4 B}</p>
        </td>
        </tr>
-  </tbody>
-</table>
-{{< /tab >}}
-{{< tab "Scala" >}}
-<table class="table table-bordered">
-    <thead>
-        <tr>
-            <th class="text-left" style="width: 25%">模式操作</th>
-            <th class="text-center">描述</th>
-        </tr>
-    </thead>
-    <tbody>
-           <tr>
-              <td><strong>consecutive()</strong><a name="consecutive_scala"></a></td>
-              <td>
-                <p>与<code>oneOrMore()</code>和<code>times()</code>一起使用， 在匹配的事件之间施加严格的连续性，
-                也就是说，任何不匹配的事件都会终止匹配（和<code>next()</code>一样）。</p>
-                <p>如果不使用它，那么就是松散连续（和<code>followedBy()</code>一样）。</p>
-
-          <p>例如，一个如下的模式：</p>
-```scala
-Pattern.begin("start").where(_.getName().equals("c"))
-  .followedBy("middle").where(_.getName().equals("a"))
-                       .oneOrMore().consecutive()
-  .followedBy("end1").where(_.getName().equals("b"))
-```
-
-                <p>输入：C D A1 A2 A3 D A4 B，会产生下面的输出：</p>
-
-                <p>如果施加严格连续性： {C A1 B}，{C A1 A2 B}，{C A1 A2 A3 B}</p>
-                <p>不施加严格连续性： {C A1 B}，{C A1 A2 B}，{C A1 A2 A3 B}，{C A1 A2 A3 A4 B}</p>
-              </td>
-           </tr>
-           <tr>
-                  <td><strong>allowCombinations()</strong><a name="allow_comb_java"></a></td>
-                  <td>
-                    <p>与<code>oneOrMore()</code>和<code>times()</code>一起使用，
-                    在匹配的事件中间施加不确定松散连续性（和<code>followedByAny()</code>一样）。</p>
-                    <p>如果不使用，就是松散连续（和<code>followedBy()</code>一样）。</p>
-
-           <p>例如，一个如下的模式：</p>
-```scala
-Pattern.begin("start").where(_.getName().equals("c"))
-  .followedBy("middle").where(_.getName().equals("a"))
-                       .oneOrMore().allowCombinations()
-  .followedBy("end1").where(_.getName().equals("b"))
-```
-
-                          <p>输入：C D A1 A2 A3 D A4 B，会产生如下的输出：</p>
-
-                          <p>如果使用不确定松散连续： {C A1 B}，{C A1 A2 B}，{C A1 A3 B}，{C A1 A4 B}，{C A1 A2 A3 B}，{C A1 A2 A4 B}，{C A1 A3 A4 B}，{C A1 A2 A3 A4 B}</p>
-                          <p>如果不使用：{C A1 B}，{C A1 A2 B}，{C A1 A2 A3 B}，{C A1 A2 A3 A4 B}</p>
-                  </td>
-                  </tr>
   </tbody>
 </table>
 {{< /tab >}}
@@ -915,30 +626,6 @@ Pattern<Event, ?> nonDetermin = start.followedByAny(
 
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-
-val start: Pattern[Event, _] = Pattern.begin(
-    Pattern.begin[Event]("start").where(...).followedBy("start_middle").where(...)
-)
-
-// 严格连续
-val strict: Pattern[Event, _] = start.next(
-    Pattern.begin[Event]("next_start").where(...).followedBy("next_middle").where(...)
-).times(3)
-
-// 松散连续
-val relaxed: Pattern[Event, _] = start.followedBy(
-    Pattern.begin[Event]("followedby_start").where(...).followedBy("followedby_middle").where(...)
-).oneOrMore()
-
-// 不确定松散连续
-val nonDetermin: Pattern[Event, _] = start.followedByAny(
-    Pattern.begin[Event]("followedbyany_start").where(...).followedBy("followedbyany_middle").where(...)
-).optional()
-
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 <br />
@@ -953,241 +640,127 @@ val nonDetermin: Pattern[Event, _] = start.followedByAny(
         </tr>
     </thead>
     <tbody>
-        <tr>
-            <td><strong>begin(#name)</strong></td>
-            <td>
-            <p>定义一个开始的模式：</p>
+<tr>
+    <td><strong>begin(#name)</strong></td>
+    <td>
+        <p>定义一个开始的模式：</p>
+
 ```java
 Pattern<Event, ?> start = Pattern.<Event>begin("start");
 ```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>begin(#pattern_sequence)</strong></td>
-            <td>
-            <p>定义一个开始的模式：</p>
+</td>
+</tr>
+<tr>
+    <td><strong>begin(#pattern_sequence)</strong></td>
+    <td>
+        <p>定义一个开始的模式：</p>
+
 ```java
 Pattern<Event, ?> start = Pattern.<Event>begin(
     Pattern.<Event>begin("start").where(...).followedBy("middle").where(...)
 );
 ```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>next(#name)</strong></td>
-            <td>
-                <p>增加一个新的模式。匹配的事件必须是直接跟在前面匹配到的事件后面（严格连续）：</p>
+</td>
+</tr>
+<tr>
+    <td><strong>next(#name)</strong></td>
+    <td>
+        <p>增加一个新的模式。匹配的事件必须是直接跟在前面匹配到的事件后面（严格连续）：</p>
+
 ```java
 Pattern<Event, ?> next = start.next("middle");
 ```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>next(#pattern_sequence)</strong></td>
-            <td>
-                <p>增加一个新的模式。匹配的事件序列必须是直接跟在前面匹配到的事件后面（严格连续）：</p>
+</td>
+</tr>
+<tr>
+    <td><strong>next(#pattern_sequence)</strong></td>
+    <td>
+        <p>增加一个新的模式。匹配的事件序列必须是直接跟在前面匹配到的事件后面（严格连续）：</p>
+
 ```java
 Pattern<Event, ?> next = start.next(
     Pattern.<Event>begin("start").where(...).followedBy("middle").where(...)
 );
 ```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>followedBy(#name)</strong></td>
-            <td>
-                <p>增加一个新的模式。可以有其他事件出现在匹配的事件和之前匹配到的事件中间（松散连续）：</p>
+</td>
+</tr>
+<tr>
+    <td><strong>followedBy(#name)</strong></td>
+    <td>
+        <p>增加一个新的模式。可以有其他事件出现在匹配的事件和之前匹配到的事件中间（松散连续）：</p>
+
 ```java
 Pattern<Event, ?> followedBy = start.followedBy("middle");
 ```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>followedBy(#pattern_sequence)</strong></td>
-            <td>
-                 <p>增加一个新的模式。可以有其他事件出现在匹配的事件序列和之前匹配到的事件中间（松散连续）：</p>
+</td>
+</tr>
+<tr>
+    <td><strong>followedBy(#pattern_sequence)</strong></td>
+    <td>
+            <p>增加一个新的模式。可以有其他事件出现在匹配的事件序列和之前匹配到的事件中间（松散连续）：</p>
+
 ```java
 Pattern<Event, ?> followedBy = start.followedBy(
     Pattern.<Event>begin("start").where(...).followedBy("middle").where(...)
 );
 ```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>followedByAny(#name)</strong></td>
-            <td>
-                <p>增加一个新的模式。可以有其他事件出现在匹配的事件和之前匹配到的事件中间，
-                每个可选的匹配事件都会作为可选的匹配结果输出（不确定的松散连续）：</p>
+</td>
+</tr>
+<tr>
+    <td><strong>followedByAny(#name)</strong></td>
+    <td>
+        <p>增加一个新的模式。可以有其他事件出现在匹配的事件和之前匹配到的事件中间，
+        每个可选的匹配事件都会作为可选的匹配结果输出（不确定的松散连续）：</p>
+
 ```java
 Pattern<Event, ?> followedByAny = start.followedByAny("middle");
 ```
-             </td>
-        </tr>
-        <tr>
-             <td><strong>followedByAny(#pattern_sequence)</strong></td>
-             <td>
-                 <p>增加一个新的模式。可以有其他事件出现在匹配的事件序列和之前匹配到的事件中间，
-                 每个可选的匹配事件序列都会作为可选的匹配结果输出（不确定的松散连续）：</p>
+</td>
+</tr>
+<tr>
+        <td><strong>followedByAny(#pattern_sequence)</strong></td>
+        <td>
+            <p>增加一个新的模式。可以有其他事件出现在匹配的事件序列和之前匹配到的事件中间，
+            每个可选的匹配事件序列都会作为可选的匹配结果输出（不确定的松散连续）：</p>
+
 ```java
 Pattern<Event, ?> followedByAny = start.followedByAny(
     Pattern.<Event>begin("start").where(...).followedBy("middle").where(...)
 );
 ```
-             </td>
-        </tr>
-        <tr>
-                    <td><strong>notNext()</strong></td>
-                    <td>
-                        <p>增加一个新的否定模式。匹配的（否定）事件必须直接跟在前面匹配到的事件之后（严格连续）来丢弃这些部分匹配：</p>
+</td>
+</tr>
+<tr>
+            <td><strong>notNext()</strong></td>
+            <td>
+                <p>增加一个新的否定模式。匹配的（否定）事件必须直接跟在前面匹配到的事件之后（严格连续）来丢弃这些部分匹配：</p>
+
 ```java
 Pattern<Event, ?> notNext = start.notNext("not");
 ```
-                    </td>
-                </tr>
-                <tr>
-                    <td><strong>notFollowedBy()</strong></td>
-                    <td>
-                        <p>增加一个新的否定模式。即使有其他事件在匹配的（否定）事件和之前匹配的事件之间发生，
-                        部分匹配的事件序列也会被丢弃（松散连续）：</p>
+</td>
+</tr>
+<tr>
+    <td><strong>notFollowedBy()</strong></td>
+    <td>
+        <p>增加一个新的否定模式。即使有其他事件在匹配的（否定）事件和之前匹配的事件之间发生，
+        部分匹配的事件序列也会被丢弃（松散连续）：</p>
+
 ```java
 Pattern<Event, ?> notFollowedBy = start.notFollowedBy("not");
 ```
-                    </td>
-                </tr>
-       <tr>
-          <td><strong>within(time)</strong></td>
-          <td>
-              <p>定义匹配模式的事件序列出现的最大时间间隔。如果未完成的事件序列超过了这个事件，就会被丢弃：</p>
+</td>
+</tr>
+<tr>
+    <td><strong>within(time)</strong></td>
+    <td>
+        <p>定义匹配模式的事件序列出现的最大时间间隔。如果未完成的事件序列超过了这个事件，就会被丢弃：</p>
+
 ```java
-pattern.within(Time.seconds(10));
+pattern.within(Duration.ofSeconds(10));
 ```
-          </td>
-       </tr>
-  </tbody>
-</table>
-{{< /tab >}}
-{{< tab "Scala" >}}
-<table class="table table-bordered">
-    <thead>
-        <tr>
-            <th class="text-left" style="width: 25%">模式操作</th>
-            <th class="text-center">描述</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td><strong>begin(#name)</strong></td>
-            <td>
-            <p>定一个开始模式：</p>
-```scala
-val start = Pattern.begin[Event]("start")
-```
-            </td>
-        </tr>
-       <tr>
-            <td><strong>begin(#pattern_sequence)</strong></td>
-            <td>
-            <p>定一个开始模式：</p>
-```scala
-val start = Pattern.begin(
-    Pattern.begin[Event]("start").where(...).followedBy("middle").where(...)
-)
-```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>next(#name)</strong></td>
-            <td>
-                <p>增加一个新的模式，匹配的事件必须是直接跟在前面匹配到的事件后面（严格连续）：</p>
-```scala
-val next = start.next("middle")
-```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>next(#pattern_sequence)</strong></td>
-            <td>
-                <p>增加一个新的模式。匹配的事件序列必须是直接跟在前面匹配到的事件后面（严格连续）：</p>
-```scala
-val next = start.next(
-    Pattern.begin[Event]("start").where(...).followedBy("middle").where(...)
-)
-```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>followedBy(#name)</strong></td>
-            <td>
-                <p>增加一个新的模式。可以有其他事件出现在匹配的事件和之前匹配到的事件中间（松散连续）：</p>
-```scala
-val followedBy = start.followedBy("middle")
-```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>followedBy(#pattern_sequence)</strong></td>
-            <td>
-                <p>增加一个新的模式。可以有其他事件出现在匹配的事件和之前匹配到的事件中间（松散连续）：</p>
-```scala
-val followedBy = start.followedBy(
-    Pattern.begin[Event]("start").where(...).followedBy("middle").where(...)
-)
-```
-            </td>
-        </tr>
-        <tr>
-            <td><strong>followedByAny(#name)</strong></td>
-            <td>
-                <p>增加一个新的模式。可以有其他事件出现在匹配的事件和之前匹配到的事件中间，
-                每个可选的匹配事件都会作为可选的匹配结果输出（不确定的松散连续）：</p>
-```scala
-val followedByAny = start.followedByAny("middle")
-```
-            </td>
-         </tr>
-         <tr>
-             <td><strong>followedByAny(#pattern_sequence)</strong></td>
-             <td>
-                 <p>增加一个新的模式。可以有其他事件出现在匹配的事件序列和之前匹配到的事件中间，
-                 每个可选的匹配事件序列都会作为可选的匹配结果输出（不确定的松散连续）：</p>
-```scala
-val followedByAny = start.followedByAny(
-    Pattern.begin[Event]("start").where(...).followedBy("middle").where(...)
-)
-```
-             </td>
-         </tr>
-
-                <tr>
-                                    <td><strong>notNext()</strong></td>
-                                    <td>
-                                        <p>增加一个新的否定模式。匹配的（否定）事件必须直接跟在前面匹配到的事件之后
-                                        （严格连续）来丢弃这些部分匹配：</p>
-```scala
-val notNext = start.notNext("not")
-```
-                                    </td>
-                                </tr>
-                                <tr>
-                                    <td><strong>notFollowedBy()</strong></td>
-                                    <td>
-                                        <p>增加一个新的否定模式。即使有其他事件在匹配的（否定）事件和之前匹配的事件之间发生，
-                                        部分匹配的事件序列也会被丢弃（松散连续）：</p>
-```scala
-val notFollowedBy = start.notFollowedBy("not")
-```
-                                    </td>
-                                </tr>
-
-       <tr>
-          <td><strong>within(time)</strong></td>
-          <td>
-              <p>定义匹配模式的事件序列出现的最大时间间隔。如果未完成的事件序列超过了这个事件，就会被丢弃：</p>
-```scala
-pattern.within(Time.seconds(10))
-```
-          </td>
-      </tr>
+</td>
+</tr>
   </tbody>
 </table>
 {{< /tab >}}
@@ -1352,12 +925,6 @@ AfterMatchSkipStrategy skipStrategy = ...;
 Pattern.begin("patternName", skipStrategy);
 ```
 {{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-val skipStrategy = ...
-Pattern.begin("patternName", skipStrategy)
-```
-{{< /tab >}}
 {{< /tabs >}}
 
 {{< hint info >}}
@@ -1370,11 +937,6 @@ Pattern.begin("patternName", skipStrategy)
 {{< tab "Java" >}}
 ```java
 AfterMatchSkipStrategy.skipToFirst(patternName).throwExceptionOnMiss();
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-AfterMatchSkipStrategy.skipToFirst(patternName).throwExceptionOnMiss()
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -1393,15 +955,6 @@ Pattern<Event, ?> pattern = ...;
 EventComparator<Event> comparator = ...; // 可选的
 
 PatternStream<Event> patternStream = CEP.pattern(input, pattern, comparator);
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-val input : DataStream[Event] = ...
-val pattern : Pattern[Event, _] = ...
-var comparator : EventComparator[Event] = ... // 可选的
-
-val patternStream: PatternStream[Event] = CEP.pattern(input, pattern, comparator)
 ```
 {{< /tab >}}
 {{< /tabs >}}
@@ -1497,26 +1050,6 @@ DataStream<TimeoutEvent> timeoutFlatResult = flatResult.getSideOutput(outputTag)
 ```
 
 {{< /tab >}}
-{{< tab "Scala" >}}
-
-```scala
-
-val patternStream: PatternStream[Event] = CEP.pattern(input, pattern)
-
-val outputTag = OutputTag[String]("side-output")
-
-val result: SingleOutputStreamOperator[ComplexEvent] = patternStream.flatSelect(outputTag){
-    (pattern: Map[String, Iterable[Event]], timestamp: Long, out: Collector[TimeoutEvent]) =>
-        out.collect(TimeoutEvent())
-} {
-    (pattern: mutable.Map[String, Iterable[Event]], out: Collector[ComplexEvent]) =>
-        out.collect(ComplexEvent())
-}
-
-val timeoutResult: DataStream[TimeoutEvent] = result.getSideOutput(outputTag)
-```
-
-{{< /tab >}}
 {{< /tabs >}}
 
 ## CEP库中的时间
@@ -1548,25 +1081,6 @@ SingleOutputStreamOperator<ComplexEvent> result = patternStream
     );
 
 DataStream<String> lateData = result.getSideOutput(lateDataOutputTag);
-
-```
-
-{{< /tab >}}
-{{< tab "Scala" >}}
-
-```scala
-
-val patternStream: PatternStream[Event] = CEP.pattern(input, pattern)
-
-val lateDataOutputTag = OutputTag[String]("late-data")
-
-val result: SingleOutputStreamOperator[ComplexEvent] = patternStream
-      .sideOutputLateData(lateDataOutputTag)
-      .select{
-          pattern: Map[String, Iterable[ComplexEvent]] => ComplexEvent()
-      }
-
-val lateData: DataStream[String] = result.getSideOutput(lateDataOutputTag)
 
 ```
 
@@ -1609,7 +1123,7 @@ public interface TimeContext {
 
 用于配置 Flink CEP 的 `SharedBuffer` 缓存容量的选项。它可以加快 CEP 算子的处理速度，并限制内存中缓存的元素数量。
 
-<span class="label label-info">Note</span> 仅当 `state.backend` 设置为 `rocksdb` 时限制内存使用才有效，这会将超过缓存数量的元素传输到 `rocksdb` 状态存储而不是内存状态存储。当 `state.backend` 设置为 `rocksdb` 时，这些配置项有助于限制内存。相比之下，当 `state.backend` 设置为非 `rocksdb` 时，缓存会导致性能下降。与使用 `Map` 实现的旧缓存相比，状态部分将包含更多从 `guava-cache` 换出的元素，这将使得 `copy on write` 时的状态处理增加一些开销。
+<span class="label label-info">Note</span> 仅当 `state.backend.type` 设置为 `rocksdb` 时限制内存使用才有效，这会将超过缓存数量的元素传输到 `rocksdb` 状态存储而不是内存状态存储。当 `state.backend.type` 设置为 `rocksdb` 时，这些配置项有助于限制内存。相比之下，当 `state.backend` 设置为非 `rocksdb` 时，缓存会导致性能下降。与使用 `Map` 实现的旧缓存相比，状态部分将包含更多从 `guava-cache` 换出的元素，这将使得 `copy on write` 时的状态处理增加一些开销。
 
 {{< generated/cep_cache_configuration >}}
 
@@ -1633,17 +1147,11 @@ DataStream<Event> partitionedInput = input.keyBy(new KeySelector<Event, Integer>
 });
 
 Pattern<Event, ?> pattern = Pattern.<Event>begin("start")
-	.next("middle").where(new SimpleCondition<Event>() {
-		@Override
-		public boolean filter(Event value) throws Exception {
-			return value.getName().equals("error");
-		}
-	}).followedBy("end").where(new SimpleCondition<Event>() {
-		@Override
-		public boolean filter(Event value) throws Exception {
-			return value.getName().equals("critical");
-		}
-	}).within(Time.seconds(10));
+    .next("middle")
+    .where(SimpleCondition.of(value -> value.getName().equals("error")))
+    .followedBy("end")
+    .where(SimpleCondition.of(value -> value.getName().equals("critical")))
+    .within(Duration.ofSeconds(10));
 
 PatternStream<Event> patternStream = CEP.pattern(partitionedInput, pattern);
 
@@ -1653,24 +1161,6 @@ DataStream<Alert> alerts = patternStream.select(new PatternSelectFunction<Event,
 		return createAlert(pattern);
 	}
 });
-```
-{{< /tab >}}
-{{< tab "Scala" >}}
-```scala
-val env : StreamExecutionEnvironment = ...
-
-val input : DataStream[Event] = ...
-
-val partitionedInput = input.keyBy(event => event.getId)
-
-val pattern = Pattern.begin[Event]("start")
-  .next("middle").where(_.getName == "error")
-  .followedBy("end").where(_.getName == "critical")
-  .within(Time.seconds(10))
-
-val patternStream = CEP.pattern(partitionedInput, pattern)
-
-val alerts = patternStream.select(createAlert(_))
 ```
 {{< /tab >}}
 {{< /tabs >}}

@@ -127,13 +127,18 @@ public abstract class AbstractExternalPythonFunctionOperator<OUT>
             return new ProcessPythonEnvironmentManager(
                     dependencyInfo,
                     getContainingTask().getEnvironment().getTaskManagerInfo().getTmpDirectories(),
-                    new HashMap<>(System.getenv()),
-                    getRuntimeContext().getJobId());
+                    systemEnvEnabled ? new HashMap<>(System.getenv()) : new HashMap<>(),
+                    getRuntimeContext().getJobInfo().getJobId());
         } else {
             throw new UnsupportedOperationException(
                     String.format(
                             "Execution type '%s' is not supported.", pythonEnv.getExecType()));
         }
+    }
+
+    @Override
+    protected void drainUnregisteredTimers() {
+        pythonFunctionRunner.drainUnregisteredTimers();
     }
 
     protected void emitResults() throws Exception {

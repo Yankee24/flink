@@ -18,16 +18,15 @@
 package org.apache.flink.table.planner.plan.utils
 
 import org.apache.flink.configuration.ReadableConfig
-import org.apache.flink.table.api.TableException
+import org.apache.flink.table.api.{TableException, ValidationException}
 import org.apache.flink.table.api.config.ExecutionConfigOptions
-import org.apache.flink.table.data.RowData
 import org.apache.flink.table.expressions._
 import org.apache.flink.table.expressions.ExpressionUtils.extractValue
 import org.apache.flink.table.functions._
 import org.apache.flink.table.planner.JLong
 import org.apache.flink.table.planner.calcite.FlinkTypeFactory
 import org.apache.flink.table.planner.delegation.PlannerBase
-import org.apache.flink.table.planner.functions.aggfunctions.{AvgAggFunction, CountAggFunction, DeclarativeAggregateFunction, Sum0AggFunction}
+import org.apache.flink.table.planner.functions.aggfunctions.{AvgAggFunction, CountAggFunction, Sum0AggFunction}
 import org.apache.flink.table.planner.functions.aggfunctions.AvgAggFunction._
 import org.apache.flink.table.planner.functions.aggfunctions.Sum0AggFunction._
 import org.apache.flink.table.planner.functions.bridging.BridgingSqlAggFunction
@@ -46,7 +45,6 @@ import org.apache.flink.table.planner.utils.ShortcutUtils.unwrapTypeFactory
 import org.apache.flink.table.runtime.dataview.DataViewSpec
 import org.apache.flink.table.runtime.functions.aggregate.BuiltInAggregateFunction
 import org.apache.flink.table.runtime.groupwindow._
-import org.apache.flink.table.runtime.operators.bundle.trigger.CountBundleTrigger
 import org.apache.flink.table.runtime.types.LogicalTypeDataTypeConverter.fromDataTypeToLogicalType
 import org.apache.flink.table.types.DataType
 import org.apache.flink.table.types.inference.TypeInferenceUtil
@@ -56,13 +54,13 @@ import org.apache.flink.table.types.logical.utils.LogicalTypeChecks
 import org.apache.flink.table.types.utils.DataTypeUtils
 
 import org.apache.calcite.rel.`type`._
+import org.apache.calcite.rel.RelCollations
 import org.apache.calcite.rel.core.{Aggregate, AggregateCall}
 import org.apache.calcite.rel.core.Aggregate.AggCallBinding
 import org.apache.calcite.sql.`type`.{SqlTypeName, SqlTypeUtil}
 import org.apache.calcite.sql.{SqlAggFunction, SqlKind, SqlRankFunction}
 import org.apache.calcite.sql.fun._
 import org.apache.calcite.sql.validate.SqlMonotonicity
-import org.apache.calcite.tools.RelBuilder
 
 import java.time.Duration
 import java.util
@@ -279,19 +277,19 @@ object AggregateUtil extends Enumeration {
       typeFactory: FlinkTypeFactory,
       inputRowType: RowType,
       aggCalls: Seq[AggregateCall],
+      needRetraction: Boolean,
       windowSpec: WindowSpec,
       isStateBackendDataViews: Boolean): AggregateInfoList = {
-    // Hopping window requires additional COUNT(*) to determine  whether to register next timer
-    // through whether the current fired window is empty, see SliceSharedWindowAggProcessor.
-    val needInputCount = windowSpec.isInstanceOf[HoppingWindowSpec]
+    // Hopping window always requires additional COUNT(*) to determine whether to register next
+    // timer through whether the current fired window is empty, see SliceSharedWindowAggProcessor.
+    val needInputCount = windowSpec.isInstanceOf[HoppingWindowSpec] || needRetraction
     val aggSize = if (needInputCount) {
       // we may insert a count(*) when need input count
       aggCalls.length + 1
     } else {
       aggCalls.length
     }
-    // TODO: derive retraction flags from ChangelogMode trait when we support retraction for window
-    val aggCallNeedRetractions = new Array[Boolean](aggSize)
+    val aggCallNeedRetractions = Array.fill(aggSize)(needRetraction)
     transformToAggregateInfoList(
       typeFactory,
       inputRowType,
@@ -499,36 +497,54 @@ object AggregateUtil extends Enumeration {
       argIndexes: Array[Int],
       udf: UserDefinedFunction,
       hasStateBackedDataViews: Boolean,
-      needsRetraction: Boolean): AggregateInfo = call.getAggregation match {
+      needsRetraction: Boolean): AggregateInfo =
+    call.getAggregation match {
+      // In the new function stack, for imperativeFunction, the conversion from
+      // BuiltInFunctionDefinition to SqlAggFunction is unnecessary, we can simply create
+      // AggregateInfo through BuiltInFunctionDefinition and runtime implementation (obtained from
+      // AggFunctionFactory) directly.
+      // NOTE: make sure to use .runtimeProvided() in BuiltInFunctionDefinition in this case.
+      case bridging: BridgingSqlAggFunction =>
+        // The FunctionDefinition maybe also instance of DeclarativeAggregateFunction
+        if (
+          bridging.getDefinition.isInstanceOf[BuiltInFunctionDefinition] || bridging.getDefinition
+            .isInstanceOf[DeclarativeAggregateFunction]
+        ) {
+          createAggregateInfoFromInternalFunction(
+            call,
+            udf,
+            index,
+            argIndexes,
+            needsRetraction,
+            hasStateBackedDataViews)
+        } else {
+          createAggregateInfoFromBridgingFunction(
+            inputRowType,
+            call,
+            index,
+            argIndexes,
+            hasStateBackedDataViews,
+            needsRetraction)
+        }
+      case _: AggSqlFunction =>
+        createAggregateInfoFromLegacyFunction(
+          inputRowType,
+          call,
+          index,
+          argIndexes,
+          udf.asInstanceOf[ImperativeAggregateFunction[_, _]],
+          hasStateBackedDataViews,
+          needsRetraction)
 
-    case _: BridgingSqlAggFunction =>
-      createAggregateInfoFromBridgingFunction(
-        inputRowType,
-        call,
-        index,
-        argIndexes,
-        hasStateBackedDataViews,
-        needsRetraction)
-
-    case _: AggSqlFunction =>
-      createAggregateInfoFromLegacyFunction(
-        inputRowType,
-        call,
-        index,
-        argIndexes,
-        udf.asInstanceOf[ImperativeAggregateFunction[_, _]],
-        hasStateBackedDataViews,
-        needsRetraction)
-
-    case _: SqlAggFunction =>
-      createAggregateInfoFromInternalFunction(
-        call,
-        udf,
-        index,
-        argIndexes,
-        needsRetraction,
-        hasStateBackedDataViews)
-  }
+      case _: SqlAggFunction =>
+        createAggregateInfoFromInternalFunction(
+          call,
+          udf,
+          index,
+          argIndexes,
+          needsRetraction,
+          hasStateBackedDataViews)
+    }
 
   private def createAggregateInfoFromBridgingFunction(
       inputRowType: RowType,
@@ -574,9 +590,14 @@ object AggregateUtil extends Enumeration {
     val enrichedArgumentDataTypes = toScala(adaptedCallContext.getArgumentDataTypes)
 
     // derive accumulator type with conversion class
-    val enrichedAccumulatorDataType = TypeInferenceUtil.inferOutputType(
-      adaptedCallContext,
-      inference.getAccumulatorTypeStrategy.orElse(inference.getOutputTypeStrategy))
+    val stateStrategies = inference.getStateTypeStrategies
+    if (stateStrategies.size() != 1) {
+      throw new ValidationException(
+        "Aggregating functions must provide exactly one state type strategy.")
+    }
+    val accumulatorStrategy = stateStrategies.values().head
+    val enrichedAccumulatorDataType =
+      TypeInferenceUtil.inferOutputType(adaptedCallContext, accumulatorStrategy)
 
     // enrich output types with conversion class
     val enrichedOutputDataType =
@@ -761,10 +782,14 @@ object AggregateUtil extends Enumeration {
         SqlStdOperatorTable.COUNT,
         false,
         false,
+        false,
         new util.ArrayList[Integer](),
         -1,
+        null,
+        RelCollations.EMPTY,
         typeFactory.createSqlType(SqlTypeName.BIGINT),
-        "_$count1$_")
+        "_$count1$_"
+      )
 
       indexOfCountStar = Some(aggregateCalls.length)
       countStarInserted = true
@@ -835,8 +860,11 @@ object AggregateUtil extends Enumeration {
             call.getAggregation,
             false,
             false,
+            call.ignoreNulls,
             call.getArgList,
             -1, // remove filterArg
+            null,
+            RelCollations.EMPTY,
             call.getType,
             call.getName)
         } else {
@@ -908,6 +936,26 @@ object AggregateUtil extends Enumeration {
     aggInfos.isEmpty || supportMerge
   }
 
+  /**
+   * Return true if all aggregates can be projected for adaptive local hash aggregate. False
+   * otherwise.
+   */
+  def doAllAggSupportAdaptiveLocalHashAgg(aggCalls: Seq[AggregateCall]): Boolean = {
+    aggCalls.forall {
+      aggCall =>
+        // TODO support adaptive local hash agg while agg call with filter condition.
+        if (aggCall.filterArg >= 0) {
+          return false
+        }
+        aggCall.getAggregation match {
+          case _: SqlCountAggFunction | _: SqlAvgAggFunction | _: SqlMinMaxAggFunction |
+              _: SqlSumAggFunction =>
+            true
+          case _ => false
+        }
+    }
+  }
+
   /** Return true if all aggregates can be split. False otherwise. */
   def doAllAggSupportSplit(aggCalls: util.List[AggregateCall]): Boolean = {
     aggCalls.forall {
@@ -915,9 +963,10 @@ object AggregateUtil extends Enumeration {
         aggCall.getAggregation match {
           case _: SqlCountAggFunction | _: SqlAvgAggFunction | _: SqlMinMaxAggFunction |
               _: SqlSumAggFunction | _: SqlSumEmptyIsZeroAggFunction |
-              _: SqlSingleValueAggFunction | _: SqlListAggFunction =>
+              _: SqlSingleValueAggFunction =>
             true
-          case _: SqlFirstLastValueAggFunction => aggCall.getArgList.size() == 1
+          case _: SqlFirstLastValueAggFunction | _: SqlListAggFunction =>
+            aggCall.getArgList.size() == 1
           case _ => false
         }
     }
@@ -1067,24 +1116,6 @@ object AggregateUtil extends Enumeration {
     (aggBufferNames ++ distinctBufferNames).toArray
   }
 
-  /** Creates a MiniBatch trigger depends on the config. */
-  def createMiniBatchTrigger(config: ReadableConfig): CountBundleTrigger[RowData] = {
-    val size = config.get(ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE)
-    if (size <= 0) {
-      throw new IllegalArgumentException(
-        ExecutionConfigOptions.TABLE_EXEC_MINIBATCH_SIZE + " must be > 0.")
-    }
-    new CountBundleTrigger[RowData](size)
-  }
-
-  /** Compute field index of given timeField expression. */
-  def timeFieldIndex(
-      inputType: RelDataType,
-      relBuilder: RelBuilder,
-      timeField: FieldReferenceExpression): Int = {
-    relBuilder.values(inputType).field(timeField.getName).getIndex
-  }
-
   /** Computes the positions of (window start, window end, row time). */
   private[flink] def computeWindowPropertyPos(
       properties: Seq[NamedWindowProperty]): (Option[Int], Option[Int], Option[Int]) = {
@@ -1150,5 +1181,20 @@ object AggregateUtil extends Enumeration {
             case _ => None
           })
       .exists(_.getKind == FunctionKind.TABLE_AGGREGATE)
+  }
+
+  def isAsyncStateEnabled(config: ReadableConfig, aggInfoList: AggregateInfoList): Boolean = {
+    // Currently, we do not support async state with agg functions that include DataView.
+    val containsDataViewInAggInfo =
+      aggInfoList.aggInfos.toStream.stream().anyMatch(agg => !agg.viewSpecs.isEmpty)
+
+    val containsDataViewInDistinctInfo =
+      aggInfoList.distinctInfos.toStream
+        .stream()
+        .anyMatch(distinct => distinct.dataViewSpec.isDefined)
+
+    config.get(ExecutionConfigOptions.TABLE_EXEC_ASYNC_STATE_ENABLED) &&
+    !containsDataViewInAggInfo &&
+    !containsDataViewInDistinctInfo
   }
 }

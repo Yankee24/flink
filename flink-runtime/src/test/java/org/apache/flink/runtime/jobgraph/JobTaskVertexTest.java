@@ -21,26 +21,35 @@ package org.apache.flink.runtime.jobgraph;
 import org.apache.flink.api.common.io.FinalizeOnMaster;
 import org.apache.flink.api.common.io.GenericInputFormat;
 import org.apache.flink.api.common.io.InitializeOnMaster;
-import org.apache.flink.api.java.io.DiscardingOutputFormat;
+import org.apache.flink.api.common.io.OutputFormat;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.core.io.GenericInputSplit;
 import org.apache.flink.core.io.InputSplit;
+import org.apache.flink.runtime.executiongraph.SimpleInitializeOnMasterContext;
 import org.apache.flink.runtime.io.network.partition.ResultPartitionType;
+import org.apache.flink.runtime.jobgraph.JobVertex.FinalizeOnMasterContext;
 import org.apache.flink.runtime.operators.util.TaskConfig;
+import org.apache.flink.testutils.junit.SharedObjectsExtension;
+import org.apache.flink.testutils.junit.SharedReference;
 import org.apache.flink.util.InstantiationUtil;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.flink.runtime.util.JobVertexConnectionUtils.connectNewDataSetAsInput;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @SuppressWarnings("serial")
 class JobTaskVertexTest {
+
+    @RegisterExtension final SharedObjectsExtension sharedObjects = SharedObjectsExtension.create();
 
     @Test
     void testMultipleConsumersVertices() {
@@ -49,13 +58,15 @@ class JobTaskVertexTest {
         JobVertex consumer2 = new JobVertex("consumer2");
 
         IntermediateDataSetID dataSetId = new IntermediateDataSetID();
-        consumer1.connectNewDataSetAsInput(
+        connectNewDataSetAsInput(
+                consumer1,
                 producer,
                 DistributionPattern.ALL_TO_ALL,
                 ResultPartitionType.BLOCKING,
                 dataSetId,
                 false);
-        consumer2.connectNewDataSetAsInput(
+        connectNewDataSetAsInput(
+                consumer2,
                 producer,
                 DistributionPattern.ALL_TO_ALL,
                 ResultPartitionType.BLOCKING,
@@ -63,8 +74,8 @@ class JobTaskVertexTest {
                 false);
 
         JobVertex consumer3 = new JobVertex("consumer3");
-        consumer3.connectNewDataSetAsInput(
-                producer, DistributionPattern.ALL_TO_ALL, ResultPartitionType.BLOCKING);
+        connectNewDataSetAsInput(
+                consumer3, producer, DistributionPattern.ALL_TO_ALL, ResultPartitionType.BLOCKING);
 
         assertThat(producer.getProducedDataSets()).hasSize(2);
 
@@ -85,8 +96,8 @@ class JobTaskVertexTest {
     void testConnectDirectly() {
         JobVertex source = new JobVertex("source");
         JobVertex target = new JobVertex("target");
-        target.connectNewDataSetAsInput(
-                source, DistributionPattern.POINTWISE, ResultPartitionType.PIPELINED);
+        connectNewDataSetAsInput(
+                target, source, DistributionPattern.POINTWISE, ResultPartitionType.PIPELINED);
 
         assertThat(source.isInputVertex()).isTrue();
         assertThat(source.isOutputVertex()).isFalse();
@@ -117,17 +128,46 @@ class JobTaskVertexTest {
 
         final ClassLoader cl = new TestClassLoader();
 
-        assertThatThrownBy(() -> vertex.initializeOnMaster(cl)).isInstanceOf(TestException.class);
+        assertThatThrownBy(
+                        () ->
+                                vertex.initializeOnMaster(
+                                        new SimpleInitializeOnMasterContext(
+                                                cl, vertex.getParallelism())))
+                .isInstanceOf(TestException.class);
 
         InputOutputFormatVertex copy = InstantiationUtil.clone(vertex);
         ClassLoader ctxCl = Thread.currentThread().getContextClassLoader();
-        assertThatThrownBy(() -> copy.initializeOnMaster(cl)).isInstanceOf(TestException.class);
+        assertThatThrownBy(
+                        () ->
+                                copy.initializeOnMaster(
+                                        new SimpleInitializeOnMasterContext(
+                                                cl, copy.getParallelism())))
+                .isInstanceOf(TestException.class);
 
         assertThat(Thread.currentThread().getContextClassLoader())
                 .as("Previous classloader was not restored.")
                 .isEqualTo(ctxCl);
 
-        assertThatThrownBy(() -> copy.finalizeOnMaster(cl)).isInstanceOf(TestException.class);
+        assertThatThrownBy(
+                        () ->
+                                copy.finalizeOnMaster(
+                                        new FinalizeOnMasterContext() {
+                                            @Override
+                                            public ClassLoader getClassLoader() {
+                                                return cl;
+                                            }
+
+                                            @Override
+                                            public int getExecutionParallelism() {
+                                                return copy.getParallelism();
+                                            }
+
+                                            @Override
+                                            public int getFinishedAttempt(int subtaskIndex) {
+                                                return 0;
+                                            }
+                                        }))
+                .isInstanceOf(TestException.class);
         assertThat(Thread.currentThread().getContextClassLoader())
                 .as("Previous classloader was not restored.")
                 .isEqualTo(ctxCl);
@@ -147,7 +187,7 @@ class JobTaskVertexTest {
 
         final ClassLoader cl = new TestClassLoader();
 
-        vertex.initializeOnMaster(cl);
+        vertex.initializeOnMaster(new SimpleInitializeOnMasterContext(cl, vertex.getParallelism()));
         InputSplit[] splits = vertex.getInputSplitSource().createInputSplits(77);
 
         assertThat(splits).isNotNull();
@@ -155,7 +195,55 @@ class JobTaskVertexTest {
         assertThat(splits[0].getClass()).isEqualTo(TestSplit.class);
     }
 
+    @Test
+    void testOutputFormatUsesCorrectParallelism() throws Exception {
+        final InputOutputFormatVertex vertex = new InputOutputFormatVertex("Name");
+        int initialParallelism = 1;
+        vertex.setParallelism(initialParallelism);
+
+        OperatorID operatorID = new OperatorID();
+        // just a mutable container for integer
+        SharedReference<AtomicInteger> globalParallelism = sharedObjects.add(new AtomicInteger());
+        new InputOutputFormatContainer(Thread.currentThread().getContextClassLoader())
+                .addOutputFormat(operatorID, new TestInitializeOutputFormat(globalParallelism))
+                .write(new TaskConfig(vertex.getConfiguration()));
+
+        int executionParallelism = initialParallelism + 3;
+        try (final TestClassLoader cl = new TestClassLoader()) {
+            vertex.initializeOnMaster(
+                    new SimpleInitializeOnMasterContext(cl, executionParallelism));
+            assertThat(globalParallelism.get().get()).isEqualTo(executionParallelism);
+        }
+    }
+
     // --------------------------------------------------------------------------------------------
+
+    private static final class TestInitializeOutputFormat
+            implements OutputFormat<Object>, InitializeOnMaster {
+
+        private final SharedReference<AtomicInteger> globalParallelism;
+
+        private TestInitializeOutputFormat(SharedReference<AtomicInteger> globalParallelism) {
+            this.globalParallelism = globalParallelism;
+        }
+
+        @Override
+        public void configure(Configuration parameters) {}
+
+        @Override
+        public void open(InitializationContext context) throws IOException {}
+
+        @Override
+        public void writeRecord(Object record) throws IOException {}
+
+        @Override
+        public void close() throws IOException {}
+
+        @Override
+        public void initializeGlobal(int parallelism) throws IOException {
+            globalParallelism.get().set(parallelism);
+        }
+    }
 
     private static final class TestException extends IOException {}
 
@@ -211,8 +299,8 @@ class JobTaskVertexTest {
         }
     }
 
-    private static final class TestingOutputFormat extends DiscardingOutputFormat<Object>
-            implements InitializeOnMaster, FinalizeOnMaster {
+    private static final class TestingOutputFormat
+            implements InitializeOnMaster, FinalizeOnMaster, OutputFormat<Object> {
 
         private boolean isConfigured = false;
 
@@ -236,7 +324,7 @@ class JobTaskVertexTest {
         }
 
         @Override
-        public void finalizeGlobal(int parallelism) throws IOException {
+        public void finalizeGlobal(FinalizationContext context) throws IOException {
             if (!isConfigured) {
                 throw new IllegalStateException(
                         "OutputFormat was not configured before finalizeGlobal was called.");
@@ -262,6 +350,15 @@ class JobTaskVertexTest {
             }
             isConfigured = true;
         }
+
+        @Override
+        public void open(InitializationContext context) throws IOException {}
+
+        @Override
+        public void writeRecord(Object record) throws IOException {}
+
+        @Override
+        public void close() throws IOException {}
     }
 
     private static class TestClassLoader extends URLClassLoader {

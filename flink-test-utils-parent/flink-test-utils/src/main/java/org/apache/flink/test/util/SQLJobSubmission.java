@@ -18,6 +18,7 @@
 
 package org.apache.flink.test.util;
 
+import java.net.URI;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,13 +30,13 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 /** Programmatic definition of a SQL job-submission. */
 public class SQLJobSubmission {
 
-    private final ClientMode clientMode;
+    private final SQLJobClientMode clientMode;
     private final List<String> sqlLines;
     private final List<String> jars;
     private final Consumer<Map<String, String>> envProcessor;
 
     private SQLJobSubmission(
-            ClientMode clientMode,
+            SQLJobClientMode clientMode,
             List<String> sqlLines,
             List<String> jars,
             Consumer<Map<String, String>> envProcessor) {
@@ -45,7 +46,7 @@ public class SQLJobSubmission {
         this.envProcessor = envProcessor;
     }
 
-    public ClientMode getClientMode() {
+    public SQLJobClientMode getClientMode() {
         return clientMode;
     }
 
@@ -63,7 +64,7 @@ public class SQLJobSubmission {
 
     /** Builder for the {@link SQLJobSubmission}. */
     public static class SQLJobSubmissionBuilder {
-        private ClientMode clientMode = ClientMode.SQL_CLIENT;
+        private SQLJobClientMode clientMode = SQLJobClientMode.getEmbeddedSqlClient();
         private final List<String> sqlLines;
         private final List<String> jars = new ArrayList<>();
 
@@ -73,13 +74,25 @@ public class SQLJobSubmission {
             this.sqlLines = sqlLines;
         }
 
-        public SQLJobSubmissionBuilder setClientMode(ClientMode clientMode) {
+        public SQLJobSubmissionBuilder setClientMode(SQLJobClientMode clientMode) {
             this.clientMode = clientMode;
+            return this;
+        }
+
+        public SQLJobSubmissionBuilder addJar(URI jarFile) {
+            this.jars.add(jarFile.toString());
             return this;
         }
 
         public SQLJobSubmissionBuilder addJar(Path jarFile) {
             this.jars.add(jarFile.toAbsolutePath().toString());
+            return this;
+        }
+
+        public SQLJobSubmissionBuilder addJars(URI... jarFiles) {
+            for (URI jarFile : jarFiles) {
+                addJar(jarFile);
+            }
             return this;
         }
 
@@ -103,14 +116,5 @@ public class SQLJobSubmission {
         public SQLJobSubmission build() {
             return new SQLJobSubmission(clientMode, sqlLines, jars, envProcessor);
         }
-    }
-
-    /** Use which client to submit job. */
-    public enum ClientMode {
-        SQL_CLIENT,
-
-        HIVE_JDBC,
-
-        REST
     }
 }

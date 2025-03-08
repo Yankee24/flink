@@ -18,9 +18,11 @@
 package org.apache.flink.streaming.api.functions.sink;
 
 import org.apache.flink.annotation.PublicEvolving;
+import org.apache.flink.api.common.SupportsConcurrentExecutionAttempts;
 import org.apache.flink.api.common.functions.util.PrintSinkOutputWriter;
 import org.apache.flink.api.connector.sink2.Sink;
 import org.apache.flink.api.connector.sink2.SinkWriter;
+import org.apache.flink.api.connector.sink2.WriterInitContext;
 
 import java.io.IOException;
 
@@ -40,7 +42,7 @@ import java.io.IOException;
  * @param <IN> Input record type
  */
 @PublicEvolving
-public class PrintSink<IN> implements Sink<IN> {
+public class PrintSink<IN> implements Sink<IN>, SupportsConcurrentExecutionAttempts {
 
     private static final long serialVersionUID = 1L;
     private final String sinkIdentifier;
@@ -83,10 +85,12 @@ public class PrintSink<IN> implements Sink<IN> {
     }
 
     @Override
-    public SinkWriter<IN> createWriter(InitContext context) throws IOException {
+    public SinkWriter<IN> createWriter(WriterInitContext context) throws IOException {
         final PrintSinkOutputWriter<IN> writer =
                 new PrintSinkOutputWriter<>(sinkIdentifier, stdErr);
-        writer.open(context.getSubtaskId(), context.getNumberOfParallelSubtasks());
+        writer.open(
+                context.getTaskInfo().getIndexOfThisSubtask(),
+                context.getTaskInfo().getNumberOfParallelSubtasks());
         return writer;
     }
 

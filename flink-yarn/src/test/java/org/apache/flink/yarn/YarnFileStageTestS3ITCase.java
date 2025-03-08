@@ -18,7 +18,6 @@
 
 package org.apache.flink.yarn;
 
-import org.apache.flink.configuration.ConfigConstants;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.CoreOptions;
 import org.apache.flink.core.fs.FileSystem;
@@ -34,19 +33,17 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.TestTemplate;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.nio.file.Files;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
 
-import static org.assertj.core.api.Assertions.assertThat;
+import static org.apache.flink.core.testutils.CommonTestUtils.setEnv;
 import static org.assertj.core.api.Assumptions.assumeThat;
 import static org.assertj.core.api.Assumptions.assumeThatThrownBy;
 
@@ -59,41 +56,22 @@ import static org.assertj.core.api.Assumptions.assumeThatThrownBy;
 @ExtendWith(RetryExtension.class)
 class YarnFileStageTestS3ITCase {
 
-    private static final Logger log = LoggerFactory.getLogger(YarnFileStageTestS3ITCase.class);
-
     private static final String TEST_DATA_DIR = "tests-" + UUID.randomUUID();
-
-    /** Number of tests executed. */
-    private static int numRecursiveUploadTests = 0;
-
-    /** Will be updated by {@link #checkCredentialsAndSetup(File)} if the test is not skipped. */
-    private static boolean skipTest = true;
+    private static Map<String, String> originalEnv;
 
     @BeforeAll
     static void checkCredentialsAndSetup(@TempDir File tempFolder) throws IOException {
+        originalEnv = System.getenv();
         // check whether credentials exist
         S3TestCredentials.assumeCredentialsAvailable();
-
-        skipTest = false;
 
         setupCustomHadoopConfig(tempFolder);
     }
 
     @AfterAll
     static void resetFileSystemConfiguration() {
+        setEnv(originalEnv);
         FileSystem.initialize(new Configuration());
-    }
-
-    @AfterAll
-    static void checkAtLeastOneTestRun() {
-        if (!skipTest) {
-            assertThat(numRecursiveUploadTests)
-                    .as(
-                            "No S3 filesystem upload test executed. Please activate the "
-                                    + "'include_hadoop_aws' build profile or set '-Dinclude_hadoop_aws' during build "
-                                    + "(Hadoop >= 2.6 moved S3 filesystems out of hadoop-common).")
-                    .isGreaterThan(0);
-        }
     }
 
     /**
@@ -104,9 +82,7 @@ class YarnFileStageTestS3ITCase {
      * href="https://issues.apache.org/jira/browse/HADOOP-3733">HADOOP-3733</a>).
      */
     private static void setupCustomHadoopConfig(File tempFolder) throws IOException {
-        File hadoopConfig =
-                Files.createTempFile(tempFolder.toPath(), UUID.randomUUID().toString(), "")
-                        .toFile();
+        final File hadoopConfig = new File(tempFolder, "hdfs-site.xml");
         Map<String /* key */, String /* value */> parameters = new HashMap<>();
 
         // set all different S3 fs implementation variants' configuration keys
@@ -133,7 +109,7 @@ class YarnFileStageTestS3ITCase {
         }
 
         final Configuration conf = new Configuration();
-        conf.setString(ConfigConstants.HDFS_SITE_CONFIG, hadoopConfig.getAbsolutePath());
+        setEnv(Collections.singletonMap("HADOOP_CONF_DIR", tempFolder.getAbsolutePath()));
         conf.set(CoreOptions.ALLOWED_FALLBACK_FILESYSTEMS, "s3;s3a;s3n");
 
         FileSystem.initialize(conf, null);
@@ -148,7 +124,6 @@ class YarnFileStageTestS3ITCase {
      */
     private void testRecursiveUploadForYarn(String scheme, String pathSuffix, File tempFolder)
             throws Exception {
-        ++numRecursiveUploadTests;
 
         final Path basePath =
                 new Path(S3TestCredentials.getTestBucketUriWithScheme(scheme) + TEST_DATA_DIR);

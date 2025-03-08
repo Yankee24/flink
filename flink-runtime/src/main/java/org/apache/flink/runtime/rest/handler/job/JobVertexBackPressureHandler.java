@@ -19,7 +19,6 @@
 package org.apache.flink.runtime.rest.handler.job;
 
 import org.apache.flink.api.common.JobID;
-import org.apache.flink.api.common.time.Time;
 import org.apache.flink.runtime.jobgraph.JobVertexID;
 import org.apache.flink.runtime.metrics.MetricNames;
 import org.apache.flink.runtime.rest.handler.AbstractRestHandler;
@@ -42,6 +41,7 @@ import org.apache.flink.runtime.webmonitor.retriever.GatewayRetriever;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -60,7 +60,7 @@ public class JobVertexBackPressureHandler
 
     public JobVertexBackPressureHandler(
             GatewayRetriever<? extends RestfulGateway> leaderRetriever,
-            Time timeout,
+            Duration timeout,
             Map<String, String> responseHeaders,
             MessageHeaders<EmptyRequestBody, JobVertexBackPressureInfo, JobVertexMessageParameters>
                     messageHeaders,
@@ -82,23 +82,23 @@ public class JobVertexBackPressureHandler
                 metricFetcher
                         .getMetricStore()
                         .getTaskMetricStore(jobId.toString(), jobVertexId.toString());
-        Map<String, Map<Integer, Integer>> jobCurrentExecutions =
-                metricFetcher.getMetricStore().getCurrentExecutionAttempts().get(jobId.toString());
-        Map<Integer, Integer> currentExecutionAttempts =
-                jobCurrentExecutions != null
-                        ? jobCurrentExecutions.get(jobVertexId.toString())
+        Map<String, Map<Integer, Integer>> jobRepresentativeExecutions =
+                metricFetcher.getMetricStore().getRepresentativeAttempts().get(jobId.toString());
+        Map<Integer, Integer> representativeAttempts =
+                jobRepresentativeExecutions != null
+                        ? jobRepresentativeExecutions.get(jobVertexId.toString())
                         : null;
 
         return CompletableFuture.completedFuture(
                 taskMetricStore != null
-                        ? createJobVertexBackPressureInfo(taskMetricStore, currentExecutionAttempts)
+                        ? createJobVertexBackPressureInfo(taskMetricStore, representativeAttempts)
                         : JobVertexBackPressureInfo.deprecated());
     }
 
     private JobVertexBackPressureInfo createJobVertexBackPressureInfo(
-            TaskMetricStore taskMetricStore, Map<Integer, Integer> currentExecutionAttempts) {
+            TaskMetricStore taskMetricStore, Map<Integer, Integer> representativeAttempts) {
         List<SubtaskBackPressureInfo> subtaskBackPressureInfos =
-                createSubtaskBackPressureInfo(taskMetricStore, currentExecutionAttempts);
+                createSubtaskBackPressureInfo(taskMetricStore, representativeAttempts);
         return new JobVertexBackPressureInfo(
                 JobVertexBackPressureInfo.VertexBackPressureStatus.OK,
                 getBackPressureLevel(getMaxBackPressureRatio(subtaskBackPressureInfos)),
@@ -107,7 +107,7 @@ public class JobVertexBackPressureHandler
     }
 
     private List<SubtaskBackPressureInfo> createSubtaskBackPressureInfo(
-            TaskMetricStore taskMetricStore, Map<Integer, Integer> currentExecutionAttempts) {
+            TaskMetricStore taskMetricStore, Map<Integer, Integer> representativeAttempts) {
         Map<Integer, SubtaskMetricStore> subtaskMetricStores =
                 taskMetricStore.getAllSubtaskMetricStores();
         List<SubtaskBackPressureInfo> result = new ArrayList<>(subtaskMetricStores.size());
@@ -121,19 +121,19 @@ public class JobVertexBackPressureHandler
                         createSubtaskAttemptBackpressureInfo(
                                 subtaskIndex, null, subtaskMetricStore, null));
             } else {
-                int currentAttempt =
-                        currentExecutionAttempts == null
+                int representativeAttempt =
+                        representativeAttempts == null
                                 ? -1
-                                : currentExecutionAttempts.getOrDefault(subtaskIndex, -1);
-                if (!allAttemptsMetricStores.containsKey(currentAttempt)) {
+                                : representativeAttempts.getOrDefault(subtaskIndex, -1);
+                if (!allAttemptsMetricStores.containsKey(representativeAttempt)) {
                     // allAttemptsMetricStores is not empty here
-                    currentAttempt = allAttemptsMetricStores.keySet().iterator().next();
+                    representativeAttempt = allAttemptsMetricStores.keySet().iterator().next();
                 }
                 List<SubtaskBackPressureInfo> otherConcurrentAttempts =
                         new ArrayList<>(allAttemptsMetricStores.size() - 1);
                 for (Map.Entry<Integer, ComponentMetricStore> attemptStore :
                         allAttemptsMetricStores.entrySet()) {
-                    if (attemptStore.getKey() == currentAttempt) {
+                    if (attemptStore.getKey() == representativeAttempt) {
                         continue;
                     }
                     otherConcurrentAttempts.add(
@@ -146,8 +146,8 @@ public class JobVertexBackPressureHandler
                 result.add(
                         createSubtaskAttemptBackpressureInfo(
                                 subtaskIndex,
-                                currentAttempt,
-                                allAttemptsMetricStores.get(currentAttempt),
+                                representativeAttempt,
+                                allAttemptsMetricStores.get(representativeAttempt),
                                 otherConcurrentAttempts));
             }
         }
